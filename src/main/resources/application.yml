@@ -1,0 +1,12 @@
+# 最小运行配置：不引入任何外部中间件，保证 mvn test / 启动开箱即用
+server:
+  port: 8989
+
+spring:
+  application:
+    name: my-first-project
+
+# Harness 约定：测试与构建阶段禁止依赖外部服务
+logging:
+  level:
+    root: INFO
