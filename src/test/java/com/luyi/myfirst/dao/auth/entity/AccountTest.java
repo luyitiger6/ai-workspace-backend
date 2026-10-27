@@ -72,6 +72,27 @@ class AccountTest {
     }
 
     @Test
+    @DisplayName("注销同时让令牌版本自增：此前签发的全部令牌作废")
+    void deleteRevokesAllTokens() {
+        Account account = accountWithStatus(AccountStatus.ACTIVE);
+        int before = account.tokenVersion();
+
+        account.delete(NOW);
+
+        assertThat(account.tokenVersion()).isEqualTo(before + 1);
+    }
+
+    @Test
+    @DisplayName("密码重置走同一条路：revokeAllTokens 让旧令牌的 ver 落后")
+    void revokeAllTokensBumpsVersion() {
+        Account account = Account.createActive(PUBLIC_ID, EMAIL, PASSWORD_HASH, "Alice");
+
+        account.revokeAllTokens();
+
+        assertThat(account.tokenVersion()).isEqualTo(1);
+    }
+
+    @Test
     @DisplayName("密码只以哈希持久化：字段不含明文，哈希可校验、错误密码被拒")
     void passwordIsPersistedAsHashOnly() throws Exception {
         BcryptPasswordHasher hasher = new BcryptPasswordHasher();

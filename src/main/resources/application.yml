@@ -44,6 +44,13 @@ wanderchain:
   auth:
     session-ttl: 7d
     jwt-secret: ${WANDERCHAIN_JWT_SECRET}
+    # 本地 HTTP 开发为 false；生产必须 true。缺这项启动即失败，不按 profile 猜
+    cookie-secure: false
+    # 已登记站点来源：写请求的 Origin（缺失时取 Referer 的源）必须精确命中其中一项。
+    # localhost 与 127.0.0.1 是两个不同的源，只登记一个的话换个写法打开页面就会被自己拒掉。
+    allowed-origins:
+      - http://localhost:3000
+      - http://127.0.0.1:3000
     captcha:
       ttl: 2m
     email-code:

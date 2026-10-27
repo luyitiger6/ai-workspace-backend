@@ -3,23 +3,34 @@ package com.luyi.myfirst.config;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
 import java.time.Duration;
+import java.util.List;
 
 /**
  * 认证链路的可调参数。
  *
  * 全部写在 application.yml 的 wanderchain.auth 下，本类刻意不给默认值：
  * 配置缺失时启动即失败，避免「改了一处配置却因代码里有兜底而没生效」。
+ *
+ * cookieSecure 决定 Set-Cookie 是否带 Secure：本地 HTTP 开发置 false，生产必须 true。
+ * 它不做 profile 推断——猜出来的安全属性等于没有。
+ *
+ * allowedOrigins 是写请求的来源白名单（spec「写请求的来源校验」里的「已登记站点来源」）。
+ * 它是登记清单而不是推导结果：子域改了没登记就自动被拒，正是「纵深防御」要的效果。
+ * 空列表同样让启动失败——空清单会把每个写请求都拒掉，那种故障现场比启动失败难查得多。
  */
 @Validated
 @ConfigurationProperties(prefix = "wanderchain.auth")
 public record AuthProperties(
         @NotNull Duration sessionTtl,
         @NotBlank String jwtSecret,
+        @NotNull Boolean cookieSecure,
+        @NotEmpty List<String> allowedOrigins,
         @NotNull @Valid Captcha captcha,
         @NotNull @Valid EmailCode emailCode,
         @NotNull @Valid Login login

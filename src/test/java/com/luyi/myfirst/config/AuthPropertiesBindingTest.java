@@ -27,6 +27,8 @@ class AuthPropertiesBindingTest {
     private static final String[] COMPLETE = {
             "wanderchain.auth.session-ttl=7d",
             SECRET,
+            "wanderchain.auth.cookie-secure=false",
+            "wanderchain.auth.allowed-origins[0]=http://localhost:3000",
             "wanderchain.auth.captcha.ttl=2m",
             "wanderchain.auth.email-code.ttl=5m",
             "wanderchain.auth.email-code.resend-cooldown=60s",
@@ -52,6 +54,7 @@ class AuthPropertiesBindingTest {
             AuthProperties props = context.getBean(AuthProperties.class);
             assertThat(props.emailCode().dailyQuota()).isEqualTo(5);
             assertThat(props.login().retryAfter()).hasSeconds(60);
+            assertThat(props.allowedOrigins()).containsExactly("http://localhost:3000");
         });
     }
 
@@ -66,6 +69,20 @@ class AuthPropertiesBindingTest {
     @DisplayName("缺 jwt-secret：容器启动失败")
     void failsWhenSecretMissing() {
         runner.withPropertyValues(without(SECRET))
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    @DisplayName("缺 cookie-secure：容器启动失败，而不是默默按 false 处理")
+    void failsWhenCookieSecureMissing() {
+        runner.withPropertyValues(without("wanderchain.auth.cookie-secure=false"))
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    @DisplayName("缺 allowed-origins：容器启动失败，而不是拿空清单把每个写请求都拒掉")
+    void failsWhenAllowedOriginsMissing() {
+        runner.withPropertyValues(without("wanderchain.auth.allowed-origins[0]=http://localhost:3000"))
                 .run(context -> assertThat(context).hasFailed());
     }
 

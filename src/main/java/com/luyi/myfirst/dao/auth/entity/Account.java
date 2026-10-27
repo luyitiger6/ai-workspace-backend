@@ -97,6 +97,17 @@ public class Account {
         }
         this.status = AccountStatus.DELETED;
         this.deletedAt = occurredAt;
+        revokeAllTokens();
+    }
+
+    /**
+     * 让本账户此前签发的全部令牌作废。
+     *
+     * 注销与密码重置都走这里：新令牌的 ver 与旧值对不上，
+     * TokenVerifier 第三步直接拒，不需要逐条吊销会话。
+     */
+    public void revokeAllTokens() {
+        this.tokenVersion++;
     }
 
     /**
