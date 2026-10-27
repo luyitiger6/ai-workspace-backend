@@ -1,4 +1,5 @@
-# 最小运行配置：不引入任何外部中间件，保证 mvn test / 启动开箱即用
+# 运行期依赖：MySQL 127.0.0.1:8806 的 wanderchain 库、Redis 127.0.0.1:6606 的 db 3。
+# 凭据只从环境变量读取，不写入本文件；缺失时启动失败，不静默降级为内存实现。
 server:
   port: 8989
 
@@ -6,7 +7,56 @@ spring:
   application:
     name: my-first-project
 
-# Harness 约定：测试与构建阶段禁止依赖外部服务
+  datasource:
+    # connectionTimeZone=UTC：应用写入的时间与库内存储保持同一时区基准
+    url: "jdbc:mysql://127.0.0.1:8806/wanderchain?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&characterEncoding=utf8&allowPublicKeyRetrieval=true&useSSL=false"
+    username: ${WANDERCHAIN_DB_USER}
+    password: ${WANDERCHAIN_DB_PASSWORD}
+
+  jpa:
+    hibernate:
+      # 建表只由 schema.sql 负责；ORM 不生成、不修改结构
+      ddl-auto: none
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  sql:
+    init:
+      # 外部库默认不执行初始化脚本，必须显式 always
+      mode: always
+      schema-locations: classpath:schema.sql
+      continue-on-error: false
+
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6606
+      database: 3
+      password: ${WANDERCHAIN_REDIS_PASSWORD}
+      timeout: 2s
+
+# 认证链路的全部可调参数。这里逐项写死而不在代码里留默认值：
+# 删掉任何一项都会启动失败，避免「配置改了但被代码兜底掩盖」。
+wanderchain:
+  auth:
+    session-ttl: 7d
+    jwt-secret: ${WANDERCHAIN_JWT_SECRET}
+    captcha:
+      ttl: 2m
+    email-code:
+      ttl: 5m
+      resend-cooldown: 60s
+      max-verify-attempts: 5
+      daily-quota: 5
+    login:
+      fail-threshold: 5
+      source-window: 10m
+      source-max: 20
+      retry-after: 60s
+
 logging:
   level:
     root: INFO

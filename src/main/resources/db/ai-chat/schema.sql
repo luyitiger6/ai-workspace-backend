@@ -1,9 +1,11 @@
--- V1: AI 会话核心表基线
+-- AI 会话库（ai_chat_gate）的建表脚本
 -- 规范来源：docs/db-design-spec.md §9
 -- 只建 users -> conversations -> messages -> usage_records 四张核心表。
--- 后续表（attachments / prompt_templates / feedbacks / model_configs / audit_logs）由后续迁移引入。
+-- 后续表（attachments / prompt_templates / feedbacks / model_configs / audit_logs）由后续脚本引入。
+-- 执行方式：由 harness\checks\06-schema-check.ps1 在 ai_chat_gate 上执行；应用启动不碰这个库。
+-- 幂等要求：每条建表都用 IF NOT EXISTS，闸门会跑两遍验证无副作用。
 
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   id              BIGINT       NOT NULL AUTO_INCREMENT,
   public_id       CHAR(26)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   email           VARCHAR(255) NOT NULL,
@@ -24,7 +26,7 @@ CREATE TABLE users (
   CONSTRAINT ck_users_version CHECK (version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
-CREATE TABLE conversations (
+CREATE TABLE IF NOT EXISTS conversations (
   id               BIGINT       NOT NULL AUTO_INCREMENT,
   public_id        CHAR(26)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   user_id          BIGINT       NOT NULL,
@@ -49,7 +51,7 @@ CREATE TABLE conversations (
   CONSTRAINT ck_conversations_version CHECK (version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
-CREATE TABLE messages (
+CREATE TABLE IF NOT EXISTS messages (
   id                  BIGINT       NOT NULL AUTO_INCREMENT,
   public_id           CHAR(26)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   conversation_id     BIGINT       NOT NULL,
@@ -80,7 +82,7 @@ CREATE TABLE messages (
   CONSTRAINT ck_messages_completion_tokens CHECK (completion_tokens >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
-CREATE TABLE usage_records (
+CREATE TABLE IF NOT EXISTS usage_records (
   id                 BIGINT        NOT NULL AUTO_INCREMENT,
   public_id          CHAR(26)      CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   user_id            BIGINT        NOT NULL,
