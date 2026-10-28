@@ -8,7 +8,23 @@ package com.luyi.myfirst.service.auth.support;
  */
 public enum CodePurpose {
 
-    REGISTER,
+    REGISTER("register"),
 
-    PASSWORD_RESET
+    PASSWORD_RESET("reset");
+
+    private final String key;
+
+    CodePurpose(String key) {
+        this.key = key;
+    }
+
+    /**
+     * 缓存键与摘要前缀里用的用途段。
+     *
+     * 键按用途分段，是为了让一个用途的码挪不到另一个端点上去用：注册码与重置码的
+     * 生成、比对、限流完全同构，若共用一个键，「两个端点各自只认自己那类码」就只剩口头约定。
+     */
+    public String key() {
+        return key;
+    }
 }
