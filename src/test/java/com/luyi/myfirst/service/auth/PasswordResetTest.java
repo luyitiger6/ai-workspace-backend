@@ -1,0 +1,289 @@
+package com.luyi.myfirst.service.auth;
+
+import com.luyi.myfirst.common.id.Ulid;
+import com.luyi.myfirst.common.security.PasswordHasher;
+import com.luyi.myfirst.dao.auth.entity.Account;
+import com.luyi.myfirst.dao.auth.repository.AccountRepository;
+import com.luyi.myfirst.service.auth.impl.CaptchaServiceImpl;
+import com.luyi.myfirst.service.auth.impl.PasswordResetCodeServiceImpl;
+import com.luyi.myfirst.service.auth.impl.RegisterCodeServiceImpl;
+import com.luyi.myfirst.service.auth.model.CaptchaIssue;
+import com.luyi.myfirst.service.auth.support.EmailNormalizer;
+import com.luyi.myfirst.service.auth.support.EmailQuotaGuard;
+import com.luyi.myfirst.service.auth.support.OutboxVerificationCodeSender;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.luyi.myfirst.web.auth.dto.LoginRequest;
+import com.luyi.myfirst.web.auth.dto.PasswordResetCodeRequest;
+import com.luyi.myfirst.web.auth.dto.PasswordResetRequest;
+import com.luyi.myfirst.web.auth.interceptor.SourceKeyResolver;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * 重置密码端点的契约（tasks 7.2）。
+ *
+ * 每条「密码没被改」的断言都用**真登录**来验证，而不是读库比对哈希：
+ * 「旧密码被拒、新密码可立即登录」是 spec 的措辞，它说的是用户能不能进得去，
+ * 不是字段变没变。读哈希只能证明写操作发生了，证明不了它真的生效。
+ *
+ * 对照组同样是本类的一半：只断言「码错时不改密码」的话，一个什么都不做的实现也能通过，
+ * 所以每条拒绝路径旁边都有一条「码对时真的改成了」。
+ *
+ * 来源键换成每个用例一个随机值（{@link SourceKeyResolver} 被换掉）：登录断言会制造
+ * 失败计数，用固定的来源键会让本类自己把自己限流掉，还会牵连同一个 Redis 上的其他用例。
+ */
+@SpringBootTest
+@AutoConfigureMockMvc
+@Transactional
+class PasswordResetTest {
+
+    private static final String REGISTERED = "laura@example.com";
+    private static final String UNREGISTERED = "mike@example.com";
+    private static final String DELETED = "nina@example.com";
+
+    private static final String OLD_PASSWORD = "correct-horse-battery";
+    private static final String NEW_PASSWORD = "staple-quantum-battery";
+    private static final String OTHER_PASSWORD = "zebra-lantern-anchor";
+
+    private static final String ORIGIN = "http://localhost:3000";
+    private static final String CAPTCHA_ANSWER = "ABCD";
+    private static final String CAPTCHA_KEY_PREFIX = "wc:captcha:";
+    private static final String WRONG_CODE = "000999";
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private PasswordResetCodeServiceImpl resetCodes;
+
+    @Autowired
+    private RegisterCodeServiceImpl registerCodes;
+
+    @Autowired
+    private CaptchaServiceImpl captcha;
+
+    @Autowired
+    private OutboxVerificationCodeSender outbox;
+
+    @Autowired
+    private EmailQuotaGuard quota;
+
+    @Autowired
+    private AccountRepository accounts;
+
+    @Autowired
+    private PasswordHasher hasher;
+
+    @Autowired
+    private StringRedisTemplate redis;
+
+    @MockitoBean
+    private SourceKeyResolver sourceKey;
+
+    private final List<String> keys = new ArrayList<>();
+
+    @BeforeEach
+    void isolateSource() {
+        // 每个用例一个来源，登录失败计数互不牵连（TTL 到期后自行消失）。
+        when(sourceKey.resolve(any())).thenReturn("reset-test-" + UUID.randomUUID());
+        outbox.clear();
+        resetCodeState(REGISTERED);
+        resetCodeState(UNREGISTERED);
+        resetCodeState(DELETED);
+    }
+
+    @AfterEach
+    void cleanUp() {
+        if (!keys.isEmpty()) {
+            // 删的是加过前缀的真实键：删原始值等于空操作，计数会漏给下一个用例。
+            keys.add(resetCodes.cooldownKeyOf(EmailNormalizer.normalize(REGISTERED)));
+            keys.add(quota.keyOf(EmailNormalizer.normalize(REGISTERED)));
+            keys.add(quota.keyOf(EmailNormalizer.normalize(UNREGISTERED)));
+            keys.add(quota.keyOf(EmailNormalizer.normalize(DELETED)));
+            redis.delete(keys);
+            keys.clear();
+        }
+    }
+
+    @Test
+    @DisplayName("码对：200、空响应体，旧密码立刻登不进去、新密码立刻能登进去")
+    void resetsPasswordSoTheOldOneStopsWorking() throws Exception {
+        persistAccount(REGISTERED);
+        String code = issueResetCode(REGISTERED);
+
+        submitReset(REGISTERED, code, NEW_PASSWORD)
+                .andExpect(status().isOk())
+                .andExpect(content().string(""));
+
+        login(REGISTERED, OLD_PASSWORD)
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHENTICATED"));
+
+        login(REGISTERED, NEW_PASSWORD).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("码是一次性的：同一枚码第二次提交 400 INVALID_CODE，密码停在第一次的结果")
+    void codeIsConsumedByTheSuccessfulReset() throws Exception {
+        persistAccount(REGISTERED);
+        String code = issueResetCode(REGISTERED);
+
+        submitReset(REGISTERED, code, NEW_PASSWORD).andExpect(status().isOk());
+
+        // 键在验码成功的同一次往返里被删掉（CONSUME_IF_MATCH），不是等 TTL 到期。
+        submitReset(REGISTERED, code, OTHER_PASSWORD)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_CODE"));
+
+        // 第二次提交若真的改了密码，这里会登不进去。
+        login(REGISTERED, NEW_PASSWORD).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("码错：400 INVALID_CODE 且密码不变——码不匹配时一行写操作都不该发生")
+    void wrongCodeDoesNotChangeThePassword() throws Exception {
+        persistAccount(REGISTERED);
+        issueResetCode(REGISTERED);
+
+        submitReset(REGISTERED, WRONG_CODE, NEW_PASSWORD)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_CODE"));
+
+        login(REGISTERED, OLD_PASSWORD).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未注册邮箱提交：响应与「重置码错误」逐字段相等")
+    void unregisteredEmailLooksExactlyLikeWrongCode() throws Exception {
+        persistAccount(REGISTERED);
+        issueResetCode(REGISTERED);
+
+        MvcResult wrongCode = submitReset(REGISTERED, WRONG_CODE, NEW_PASSWORD)
+                .andExpect(status().isBadRequest())
+                .andReturn();
+
+        MvcResult unknownEmail = submitReset(UNREGISTERED, WRONG_CODE, NEW_PASSWORD)
+                .andExpect(status().isBadRequest())
+                .andReturn();
+
+        assertThat(unknownEmail.getResponse().getStatus())
+                .isEqualTo(wrongCode.getResponse().getStatus());
+        assertThat(unknownEmail.getResponse().getContentAsString(StandardCharsets.UTF_8))
+                .isEqualTo(wrongCode.getResponse().getContentAsString(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    @DisplayName("已注销邮箱提交：与码错误同形，且不复活旧账户")
+    void deletedEmailCannotReset() throws Exception {
+        Account old = persistAccount(DELETED);
+        old.delete(Instant.now());
+        accounts.save(old);
+
+        submitReset(DELETED, WRONG_CODE, NEW_PASSWORD)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_CODE"));
+
+        assertThat(accounts.findByEmailAndDeletedAtIsNull(DELETED)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("新密码太短：400 VALIDATION_FAILED，且不烧掉用户手里那枚码")
+    void malformedPasswordIsRejectedWithoutBurningTheCode() throws Exception {
+        persistAccount(REGISTERED);
+        String code = issueResetCode(REGISTERED);
+
+        // 格式校验排在验码之前：密码不合格是表单错误，不该让用户重走整条取码链路。
+        submitReset(REGISTERED, code, "1234567")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+
+        submitReset(REGISTERED, code, NEW_PASSWORD).andExpect(status().isOk());
+        login(REGISTERED, NEW_PASSWORD).andExpect(status().isOk());
+    }
+
+    private Account persistAccount(String email) {
+        return accounts.save(Account.createActive(
+                Ulid.generate(), email, hasher.hash(OLD_PASSWORD), "Probe"));
+    }
+
+    private CaptchaIssue captchaOf() {
+        CaptchaIssue issue = captcha.issue(CAPTCHA_ANSWER);
+        keys.add(CAPTCHA_KEY_PREFIX + issue.captchaId());
+        return issue;
+    }
+
+    /** 走真实端点取码，明文码从 outbox 读——它是唯一能看到码的地方（D8）。 */
+    private String issueResetCode(String email) throws Exception {
+        CaptchaIssue issue = captchaOf();
+        String body = objectMapper.writeValueAsString(
+                new PasswordResetCodeRequest(email, issue.captchaId(), CAPTCHA_ANSWER));
+        mockMvc.perform(MockMvcRequestBuilders.post("/api/auth/password-reset-code")
+                        .header(HttpHeaders.ORIGIN, ORIGIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isAccepted());
+
+        List<OutboxVerificationCodeSender.Message> messages = outbox.messages();
+        assertThat(messages).isNotEmpty();
+        return messages.get(messages.size() - 1).code();
+    }
+
+    private ResultActions submitReset(String email, String code, String newPassword) throws Exception {
+        String body = objectMapper.writeValueAsString(
+                new PasswordResetRequest(email, code, newPassword));
+        return mockMvc.perform(MockMvcRequestBuilders.post("/api/auth/password-reset")
+                .header(HttpHeaders.ORIGIN, ORIGIN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body));
+    }
+
+    private ResultActions login(String email, String password) throws Exception {
+        String body = objectMapper.writeValueAsString(new LoginRequest(email, password, null, null));
+        return mockMvc.perform(MockMvcRequestBuilders.post("/api/auth/login")
+                .header(HttpHeaders.ORIGIN, ORIGIN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body));
+    }
+
+    private void resetCodeState(String email) {
+        String normalized = EmailNormalizer.normalize(email);
+        redis.delete(List.of(
+                registerCodes.keyOf(normalized),
+                registerCodes.failKeyOf(normalized),
+                resetCodes.keyOf(normalized),
+                resetCodes.failKeyOf(normalized),
+                resetCodes.cooldownKeyOf(normalized),
+                quota.keyOf(normalized)));
+    }
+}

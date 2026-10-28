@@ -120,6 +120,18 @@ public class Account {
     }
 
     /**
+     * 换密码：换哈希与作废旧令牌只能一起发生。
+     *
+     * 只改哈希而留着旧令牌，等于「密码换了，别人手里那杯茶还热着」——用户以为已经把对方踢下线，
+     * 实际对方还能继续操作。所以不提供只改哈希的方法：拿到本方法就只能两件事一起发生。
+     * 不改状态：密码重置不是状态迁移，`email_unverified` 重置完仍然是 `email_unverified`。
+     */
+    public void changePassword(String newPasswordHash) {
+        this.passwordHash = newPasswordHash;
+        revokeAllTokens();
+    }
+
+    /**
      * 拿外部提交的明文与已存哈希比对。
      * 哈希不出实体：调用方只能拿到是/否，拿不到 passwordHash 本身（D5）。
      */
