@@ -1,5 +1,7 @@
 package com.luyi.myfirst.web.auth.dto;
 
+import com.luyi.myfirst.common.web.AuthResponseBody;
+
 import java.time.Instant;
 
 /**
@@ -16,5 +18,5 @@ public record MeResponse(
         String email,
         String displayName,
         String status,
-        Instant createdAt) {
+        Instant createdAt) implements AuthResponseBody {
 }
