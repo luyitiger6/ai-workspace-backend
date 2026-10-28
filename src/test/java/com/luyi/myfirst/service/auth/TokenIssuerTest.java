@@ -99,6 +99,7 @@ class TokenIssuerTest {
                 secret,
                 false,
                 List.of("http://localhost:3000"),
+                List.of(),
                 new AuthProperties.Captcha(Duration.ofMinutes(2)),
                 new AuthProperties.EmailCode(Duration.ofMinutes(5), Duration.ofSeconds(60), 5, 5),
                 new AuthProperties.Login(5, Duration.ofMinutes(10), 20, Duration.ofSeconds(60)));

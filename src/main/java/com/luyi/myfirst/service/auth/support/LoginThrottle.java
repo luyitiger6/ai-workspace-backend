@@ -54,7 +54,17 @@ public class LoginThrottle {
 
     /** 来源在窗口内的失败已达上限：直接 429，不比对凭证。 */
     public boolean isSourceBlocked(String sourceKey) {
-        return count(SOURCE_KEY_PREFIX + sourceKey) >= login.sourceMax();
+        return count(sourceKeyOf(sourceKey)) >= login.sourceMax();
+    }
+
+    /**
+     * 来源计数的键。键的构成只有这一处，调用方不该自己拼。
+     *
+     * 公开是为了让测试能精确清掉自己造的计数：来源计数活在共享缓存里，
+     * 数据库回滚救不了它，残留会污染同一 Redis 上的其他用例。
+     */
+    public String sourceKeyOf(String sourceKey) {
+        return SOURCE_KEY_PREFIX + sourceKey;
     }
 
     /** 429 的 Retry-After，来源维度取固定值而非递增：NAT 后的合法用户不应被指数惩罚。 */
@@ -76,7 +86,7 @@ public class LoginThrottle {
      * 否则未知邮箱可以无限试探（spec「单来源撞多账户共用额度」）。
      */
     public void recordSourceFailure(String sourceKey) {
-        increment(SOURCE_KEY_PREFIX + sourceKey, login.sourceWindow());
+        increment(sourceKeyOf(sourceKey), login.sourceWindow());
     }
 
     /**

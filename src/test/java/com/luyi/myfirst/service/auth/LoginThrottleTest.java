@@ -107,6 +107,7 @@ class LoginThrottleTest {
                 "test-only-secret",
                 false,
                 List.of("http://localhost:3000"),
+                List.of(),
                 new AuthProperties.Captcha(Duration.ofMinutes(2)),
                 new AuthProperties.EmailCode(Duration.ofMinutes(5), Duration.ofSeconds(60), 5, 5),
                 new AuthProperties.Login(failThreshold, Duration.ofMinutes(10), sourceMax, Duration.ofSeconds(60)));

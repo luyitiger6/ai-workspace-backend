@@ -29,6 +29,7 @@ class AuthPropertiesBindingTest {
             SECRET,
             "wanderchain.auth.cookie-secure=false",
             "wanderchain.auth.allowed-origins[0]=http://localhost:3000",
+            "wanderchain.auth.trusted-proxies[0]=10.0.0.0/8",
             "wanderchain.auth.captcha.ttl=2m",
             "wanderchain.auth.email-code.ttl=5m",
             "wanderchain.auth.email-code.resend-cooldown=60s",
@@ -55,6 +56,7 @@ class AuthPropertiesBindingTest {
             assertThat(props.emailCode().dailyQuota()).isEqualTo(5);
             assertThat(props.login().retryAfter()).hasSeconds(60);
             assertThat(props.allowedOrigins()).containsExactly("http://localhost:3000");
+            assertThat(props.trustedProxies()).containsExactly("10.0.0.0/8");
         });
     }
 
@@ -83,6 +85,13 @@ class AuthPropertiesBindingTest {
     @DisplayName("缺 allowed-origins：容器启动失败，而不是拿空清单把每个写请求都拒掉")
     void failsWhenAllowedOriginsMissing() {
         runner.withPropertyValues(without("wanderchain.auth.allowed-origins[0]=http://localhost:3000"))
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    @DisplayName("缺 trusted-proxies：容器启动失败——空列表是明确取值，缺项不是")
+    void failsWhenTrustedProxiesMissing() {
+        runner.withPropertyValues(without("wanderchain.auth.trusted-proxies[0]=10.0.0.0/8"))
                 .run(context -> assertThat(context).hasFailed());
     }
 

@@ -23,6 +23,11 @@ import java.util.List;
  * allowedOrigins 是写请求的来源白名单（spec「写请求的来源校验」里的「已登记站点来源」）。
  * 它是登记清单而不是推导结果：子域改了没登记就自动被拒，正是「纵深防御」要的效果。
  * 空列表同样让启动失败——空清单会把每个写请求都拒掉，那种故障现场比启动失败难查得多。
+ *
+ * trustedProxies 是来源限流的信任边界（spec「登录失败以来源限流代替账户锁定」）：
+ * 只有来自这些地址或网段的请求，其转发头才被采信。空列表是合法取值且含义明确——
+ * 当前没有任何已登记代理，因此每个请求都归入「未知来源」单桶（宁可误伤，不可放过）；
+ * 缺这一项则启动失败。
  */
 @Validated
 @ConfigurationProperties(prefix = "wanderchain.auth")
@@ -31,6 +36,7 @@ public record AuthProperties(
         @NotBlank String jwtSecret,
         @NotNull Boolean cookieSecure,
         @NotEmpty List<String> allowedOrigins,
+        @NotNull List<String> trustedProxies,
         @NotNull @Valid Captcha captcha,
         @NotNull @Valid EmailCode emailCode,
         @NotNull @Valid Login login

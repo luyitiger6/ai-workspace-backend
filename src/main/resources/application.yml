@@ -51,6 +51,12 @@ wanderchain:
     allowed-origins:
       - http://localhost:3000
       - http://127.0.0.1:3000
+    # 来源限流的信任边界：只有来自这些地址/网段的请求，其 X-Forwarded-For 才被采信，
+    # 且只取最右一跳（代理自己追加的那个）。直达请求自带的转发头一律不采信。
+    # 空列表是当前拓扑的诚实取值：前端 Next Route Handler 拿不到客户端 IP，也就不会
+    # 追加可信跳，所以现在每个请求都归入「未知来源」单桶——比直信转发头安全得多。
+    # 在前后端之间接入 nginx / ALB 这类会追加 X-Forwarded-For 的代理后，登记它的出口地址。
+    trusted-proxies: []
     captcha:
       ttl: 2m
     email-code:

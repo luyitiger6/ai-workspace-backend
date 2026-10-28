@@ -9,7 +9,7 @@ import com.luyi.myfirst.dao.auth.entity.Account;
 import com.luyi.myfirst.dao.auth.repository.AccountRepository;
 import com.luyi.myfirst.service.auth.support.LoginThrottle;
 import com.luyi.myfirst.web.auth.dto.LoginRequest;
-import com.luyi.myfirst.web.auth.interceptor.UnknownBucketSourceKeyResolver;
+import com.luyi.myfirst.web.auth.interceptor.TrustedProxySourceKeyResolver;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,9 +35,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 正确密码也拿不到令牌——来源闸门在成功路径之前；
  * 错误密码不留下任何账户维度的失败痕迹——密码比对压根没发生。
  *
- * 本类故意用真实来源策略（所有请求归入未知来源单桶），这正是 5.9 落地前的
- * 实际行为。用例自己把额度灌满，留在桶里由窗口 TTL 收回：它只影响同样走真实
- * 来源的用例，而其他登录用例都换成了各自的随机来源键。
+ * 本类故意用真实来源策略：MockMvc 的对端地址不在 trusted-proxies 里，请求因此按
+ * 「未知来源」计数——这也是 application.yml 把 trusted-proxies 留空后生产上的实际行为。
+ * 用例自己把额度灌满，留在桶里由窗口 TTL 收回：它只影响同样走真实来源的用例，
+ * 而其他登录用例都换成了各自的随机来源键。
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -72,7 +73,7 @@ class LoginSourceThrottleTest {
     void sourceThrottlePreemptsPasswordComparison() throws Exception {
         Account account = saveAccount();
         for (int i = 0; i < properties.login().sourceMax(); i++) {
-            throttle.recordSourceFailure(UnknownBucketSourceKeyResolver.UNKNOWN_SOURCE);
+            throttle.recordSourceFailure(TrustedProxySourceKeyResolver.UNKNOWN_SOURCE);
         }
 
         MvcResult withCorrectPassword = login(PASSWORD)
