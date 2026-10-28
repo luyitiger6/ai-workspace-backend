@@ -1,5 +1,6 @@
 package com.luyi.myfirst.service.auth;
 
+import com.luyi.myfirst.common.enums.AccountStatus;
 import com.luyi.myfirst.common.id.Ulid;
 import com.luyi.myfirst.common.security.PasswordHasher;
 import com.luyi.myfirst.dao.auth.entity.Account;
@@ -341,6 +342,40 @@ class PasswordResetTest {
                 .andExpect(jsonPath("$.code").value("INVALID_CODE"));
 
         login(REGISTERED, OLD_PASSWORD).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("反复重置：每一轮的失败与成功都不改账户状态，当轮结束后都能用当时的密码登录")
+    void repeatedResetsNeverLockTheAccount() throws Exception {
+        persistAccount(REGISTERED);
+        String password = OLD_PASSWORD;
+
+        for (int round = 1; round <= 3; round++) {
+            String next = "round-" + round + "-password";
+
+            // 每轮先错后对：两条路径都走一遍，看状态会不会被其中某一路改写。
+            submitReset(REGISTERED, WRONG_CODE, next)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_CODE"));
+
+            // 冷却只是发码节流，不属账户状态；要在一例里走完三轮就得把它清掉
+            // —— 冷却本身的行为由 `PasswordResetCodeTest` 看守。
+            redis.delete(resetCodes.cooldownKeyOf(EmailNormalizer.normalize(REGISTERED)));
+            String code = issueResetCode(REGISTERED);
+            submitReset(REGISTERED, code, next).andExpect(status().isOk());
+
+            password = next;
+            // 登录能成功就是「没被锁」的直接证据：login 只在账户 active 时才签发令牌。
+            login(REGISTERED, password).andExpect(status().isOk());
+            assertThat(accounts.findByEmailAndDeletedAtIsNull(REGISTERED).orElseThrow().status())
+                    .isEqualTo(AccountStatus.ACTIVE);
+        }
+
+        Account reloaded = accounts.findByEmailAndDeletedAtIsNull(REGISTERED).orElseThrow();
+        // 三轮各推进一次版本：重置只碰哈希与版本，不碰状态、不碰 deletedAt。
+        assertThat(reloaded.tokenVersion()).isEqualTo(3);
+        assertThat(reloaded.deletedAt()).isNull();
+        login(REGISTERED, OLD_PASSWORD).andExpect(status().isUnauthorized());
     }
 
     private Account persistAccount(String email) {
