@@ -29,9 +29,15 @@ import java.time.Instant;
  *
  * 两道前置拒绝站在最外面：来源限流先于一切（否则限流对爆破无效），
  * 账户维度图形码先于密码比对（否则一张码就换来一次密码尝试）。
+ *
+ * 账户不存在时也要付一次 bcrypt 的钱：响应体可以做到逐字相同，响应时间做不到——
+ * 「查不到就返回」与「查到了但密码不对」相差几十毫秒，足够逐个试出哪些邮箱注册过。
  */
 @Service
 public class LoginServiceImpl implements LoginService {
+
+    /** 仅用于在构造期生成一个与真实账户同样强度的比对目标，从不作为任何账户的密码。 */
+    private static final String TIMING_EQUALIZATION_SEED = "wc-timing-equalization";
 
     private final AccountRepository accounts;
     private final AuthSessionRepository sessions;
@@ -39,6 +45,14 @@ public class LoginServiceImpl implements LoginService {
     private final TokenIssuer issuer;
     private final LoginThrottle throttle;
     private final CaptchaService captcha;
+
+    /**
+     * 账户不存在时的比对目标：构造期用同一个 hasher 生成一次。
+     *
+     * 不硬编码一个 bcrypt 串：那个串会把 cost 写死在代码里，日后调强度或换算法时，
+     * 「账户存在」与「账户不存在」两条路径的耗时会再次分叉，而分叉本身就是计时信道。
+     */
+    private final String timingEqualizationHash;
 
     public LoginServiceImpl(AccountRepository accounts,
                             AuthSessionRepository sessions,
@@ -52,6 +66,7 @@ public class LoginServiceImpl implements LoginService {
         this.issuer = issuer;
         this.throttle = throttle;
         this.captcha = captcha;
+        this.timingEqualizationHash = hasher.hash(TIMING_EQUALIZATION_SEED);
     }
 
     /**
@@ -85,7 +100,16 @@ public class LoginServiceImpl implements LoginService {
         }
 
         // 2. 凭证：查不到与密码不对同体。失败只计入限流计数，不改账户状态。
-        if (account == null || !account.passwordMatches(hasher, attempt.rawPassword())) {
+        boolean credentialsValid;
+        if (account == null) {
+            // 查不到账户也付一次 bcrypt 的成本（D3 实现约束）。返回值刻意丢弃：
+            // 这次比对只为了耗时，结论永远是「凭证不对」。
+            hasher.matches(attempt.rawPassword(), timingEqualizationHash);
+            credentialsValid = false;
+        } else {
+            credentialsValid = account.passwordMatches(hasher, attempt.rawPassword());
+        }
+        if (!credentialsValid) {
             if (account == null) {
                 throttle.recordSourceFailure(attempt.sourceKey());
             } else {
