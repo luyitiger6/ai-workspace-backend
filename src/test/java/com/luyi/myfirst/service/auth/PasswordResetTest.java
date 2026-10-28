@@ -51,7 +51,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 重置密码端点的契约（tasks 7.2 / 7.3）。
+ * 重置密码端点的契约（tasks 7.2 / 7.3 / 7.4）。
  *
  * 每条「密码没被改」的断言都用**真登录**来验证，而不是读库比对哈希：
  * 「旧密码被拒、新密码可立即登录」是 spec 的措辞，它说的是用户能不能进得去，
@@ -60,6 +60,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 旧令牌作废也用真请求验证（{@code GET /api/auth/me}，由 {@code AuthInterceptor} 走完
  * 验签 → jti → 账户 active 且 ver 一致三步），不在测试里直接调 {@code TokenVerifier}：
  * 7.3 的措辞是「下一次请求即被拒」，能证明这一点的只有一次请求。
+ *
+ * 码的三条失败分支（已用过、已过期、比对失败超限）各有一条用例，且一律以「旧密码仍能登录」
+ * 收尾：三条分支在缓存看来都是同一件事（键不在了），区别只在「为什么不在」，
+ * 而 spec 要求的是三者都不修改密码。
  *
  * 对照组同样是本类的一半：只断言「码错时不改密码」的话，一个什么都不做的实现也能通过，
  * 所以每条拒绝路径旁边都有一条「码对时真的改成了」。
@@ -175,6 +179,8 @@ class PasswordResetTest {
 
         // 第二次提交若真的改了密码，这里会登不进去。
         login(REGISTERED, NEW_PASSWORD).andExpect(status().isOk());
+        // 反向那一半：第二次也没把密码改成它自己提交的那个。
+        login(REGISTERED, OTHER_PASSWORD).andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -273,6 +279,68 @@ class PasswordResetTest {
         Cookie fresh = sessionCookie(REGISTERED, NEW_PASSWORD);
         me(fresh).andExpect(status().isOk())
                 .andExpect(jsonPath("$.email").value(REGISTERED));
+    }
+
+    @Test
+    @DisplayName("码过期：拿着过期的码提交 400 INVALID_CODE，密码不变")
+    void expiredCodeDoesNotChangeThePassword() throws Exception {
+        persistAccount(REGISTERED);
+        String code = issueResetCode(REGISTERED);
+
+        // 过期在缓存里就是「键不在了」，与「从未发过」「已经用过」不可区分（见 EmailCodeFlow）。
+        // 用删键模拟 TTL 到期而不是真等 5 分钟：这里要验的是过期之后的判定，不是计时器本身
+        // ——「TTL 确实是 5 分钟」已由 7.1 的 [270,300] 断言钉住。
+        redis.delete(resetCodes.keyOf(EmailNormalizer.normalize(REGISTERED)));
+
+        submitReset(REGISTERED, code, NEW_PASSWORD)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_CODE"));
+
+        login(REGISTERED, OLD_PASSWORD).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("连错 4 次：码仍然可用——阈值是 5，不是「错一次就作废」")
+    void fourWrongAttemptsLeaveTheCodeUsable() throws Exception {
+        persistAccount(REGISTERED);
+        String code = issueResetCode(REGISTERED);
+
+        for (int attempt = 1; attempt <= 4; attempt++) {
+            submitReset(REGISTERED, WRONG_CODE, NEW_PASSWORD)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_CODE"));
+        }
+
+        // 四次失败一次都没改密码。
+        login(REGISTERED, OLD_PASSWORD).andExpect(status().isOk());
+
+        // 对照：阈值没被提前。少了这一句，一个「错一次就作废」的实现也能让上面全绿。
+        submitReset(REGISTERED, code, NEW_PASSWORD).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("连错 5 次：码连同失败计数一起作废，之后正确的码也被拒、密码不变")
+    void fifthWrongAttemptBurnsTheCodeEvenForTheRightOne() throws Exception {
+        persistAccount(REGISTERED);
+        String code = issueResetCode(REGISTERED);
+
+        for (int attempt = 1; attempt <= 5; attempt++) {
+            submitReset(REGISTERED, WRONG_CODE, NEW_PASSWORD)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_CODE"));
+        }
+
+        String normalized = EmailNormalizer.normalize(REGISTERED);
+        // 两个键一起被删：只删码而留着计数的话，下次发码时计数还挂着，阈值就提前了；
+        // 只删计数而留着码的话，超限等于没发生过。
+        assertThat(redis.hasKey(resetCodes.keyOf(normalized))).isFalse();
+        assertThat(redis.hasKey(resetCodes.failKeyOf(normalized))).isFalse();
+
+        submitReset(REGISTERED, code, NEW_PASSWORD)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_CODE"));
+
+        login(REGISTERED, OLD_PASSWORD).andExpect(status().isOk());
     }
 
     private Account persistAccount(String email) {
