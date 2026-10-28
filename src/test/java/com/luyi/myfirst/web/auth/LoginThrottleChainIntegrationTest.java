@@ -126,6 +126,12 @@ class LoginThrottleChainIntegrationTest {
         Account account = accounts.saveAndFlush(
                 Account.createActive(Ulid.generate(), EMAIL, hasher.hash(PASSWORD), DISPLAY_NAME));
         accountId = account.id();
+        // 账户维度计数活在共享缓存里、TTL 长达 30 天，键取自 accounts 的自增 id。测试库每次
+        // @Transactional 回滚后表是空的、自增值却停在低位，于是本用例新种的账户会抽到一个
+        // 「别的物理账户上一轮留下过失败计数」的 id——requiresCaptcha 因此在里程碑 1 之前就已为真，
+        // 401 被顶成 400 CAPTCHA_INVALID。@BeforeEach 只清来源键（那时尚未种账户），账户维度只能
+        // 在种下之后清：一个新账户本就不该有任何连续失败历史，这里清掉的是陈旧残留，不是本用例的状态。
+        throttle.clearAccountFailures(accountId);
         assertAccountStillActive("建账户后");
 
         // ── 里程碑 1：来源 A 连续失败达账户阈值（fail-threshold=2），每次都真比对密码后 401。
