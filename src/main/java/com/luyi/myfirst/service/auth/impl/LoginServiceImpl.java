@@ -3,6 +3,7 @@ package com.luyi.myfirst.service.auth.impl;
 import com.luyi.myfirst.common.exception.AuthErrorEnum;
 import com.luyi.myfirst.common.exception.BizException;
 import com.luyi.myfirst.common.security.PasswordHasher;
+import com.luyi.myfirst.common.security.PasswordRules;
 import com.luyi.myfirst.dao.auth.entity.Account;
 import com.luyi.myfirst.dao.auth.entity.AuthSession;
 import com.luyi.myfirst.dao.auth.repository.AccountRepository;
@@ -32,6 +33,11 @@ import java.time.Instant;
  *
  * 账户不存在时也要付一次 bcrypt 的钱：响应体可以做到逐字相同，响应时间做不到——
  * 「查不到就返回」与「查到了但密码不对」相差几十毫秒，足够逐个试出哪些邮箱注册过。
+ *
+ * 登录同样执行注册那套入参校验（spec「注册入参与邮箱规范化」写的是「注册与登录」）：
+ * 邮箱 trim + 小写，密码 8–72 字节。上限不是口味问题：bcrypt 只读前 72 字节，
+ * 不拒超长输入的话，「72 字节的密码」与「同样 72 字节再跟任意后缀」会落进同一个
+ * 等价类，密码空间被静默压小。
  */
 @Service
 public class LoginServiceImpl implements LoginService {
@@ -87,7 +93,9 @@ public class LoginServiceImpl implements LoginService {
         }
 
         String normalized = EmailNormalizer.normalize(attempt.email());
-        if (normalized == null || normalized.isBlank() || attempt.rawPassword() == null) {
+        // 格式校验是账户无关的：无论邮箱存不存在都回同一个 400，因此它不进限流计数、
+        // 也不构成枚举信道；它同时站在图形码判定之前——格式错误不该消耗用户手里那张码。
+        if (normalized == null || normalized.isBlank() || !PasswordRules.isValid(attempt.rawPassword())) {
             throw new BizException(AuthErrorEnum.VALIDATION_FAILED);
         }
 
