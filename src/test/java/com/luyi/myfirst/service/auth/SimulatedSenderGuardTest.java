@@ -109,12 +109,13 @@ class SimulatedSenderGuardTest {
     }
 
     @Test
-    @DisplayName("端点清单：/api/auth 下只有登记过的三个端点，没有读验证码的接口")
+    @DisplayName("端点清单：/api/auth 下只有登记过的四个端点，没有读验证码的接口")
     void authEndpointsAreExactlyTheRegisteredOnes() {
         // 新增端点必须显式加到这里：让「悄悄多出一个能读码的接口」变成一次红灯，
         // 而不是上线后在日志里发现。
         assertThat(authEndpoints()).containsExactlyInAnyOrder(
                 "GET /api/auth/captcha",
+                "POST /api/auth/login",
                 "POST /api/auth/register",
                 "POST /api/auth/register-code");
     }
