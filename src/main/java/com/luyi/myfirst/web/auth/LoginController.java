@@ -1,9 +1,12 @@
 package com.luyi.myfirst.web.auth;
 
 import com.luyi.myfirst.service.auth.LoginService;
+import com.luyi.myfirst.service.auth.model.LoginAttempt;
 import com.luyi.myfirst.service.auth.model.LoginResult;
 import com.luyi.myfirst.web.auth.dto.LoginRequest;
 import com.luyi.myfirst.web.auth.dto.LoginResponse;
+import com.luyi.myfirst.web.auth.interceptor.SourceKeyResolver;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,6 +24,9 @@ import java.time.Instant;
  * 「先凭证后状态」的顺序就有了第二个可以被改坏的地方。
  *
  * 令牌与注册一样只走 Set-Cookie，响应体里检索不到它。
+ *
+ * 来源键也在这里取：控制器是唯一拿到 "这次请求从哪来" 的地方，服务层只接受
+ * 已经算好的键（见 `SourceKeyResolver`）。换来源策略不应改动服务层。
  */
 @RestController
 @RequestMapping("/api/auth")
@@ -28,16 +34,24 @@ public class LoginController {
 
     private final LoginService loginService;
     private final AuthCookie authCookie;
+    private final SourceKeyResolver sourceKey;
 
-    public LoginController(LoginService loginService, AuthCookie authCookie) {
+    public LoginController(LoginService loginService, AuthCookie authCookie, SourceKeyResolver sourceKey) {
         this.loginService = loginService;
         this.authCookie = authCookie;
+        this.sourceKey = sourceKey;
     }
 
     @PostMapping("/login")
     ResponseEntity<LoginResponse> login(@RequestBody LoginRequest request,
+                                        HttpServletRequest httpRequest,
                                         HttpServletResponse response) {
-        LoginResult result = loginService.login(request.email(), request.password(), Instant.now());
+        LoginResult result = loginService.login(new LoginAttempt(
+                request.email(),
+                request.password(),
+                request.captchaId(),
+                request.captchaAnswer(),
+                sourceKey.resolve(httpRequest)), Instant.now());
 
         authCookie.write(response, result.token().value());
 
