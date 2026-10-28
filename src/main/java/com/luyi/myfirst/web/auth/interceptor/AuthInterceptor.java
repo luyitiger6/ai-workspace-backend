@@ -1,7 +1,10 @@
-package com.luyi.myfirst.service.auth;
+package com.luyi.myfirst.web.auth.interceptor;
 
 import com.luyi.myfirst.common.exception.AuthErrorEnum;
 import com.luyi.myfirst.common.exception.BizException;
+import com.luyi.myfirst.service.auth.model.VerifiedToken;
+import com.luyi.myfirst.service.auth.support.TokenVerifier;
+import com.luyi.myfirst.web.auth.AuthCookie;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;

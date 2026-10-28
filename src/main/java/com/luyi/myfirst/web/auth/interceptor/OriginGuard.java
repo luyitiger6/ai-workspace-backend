@@ -1,4 +1,4 @@
-package com.luyi.myfirst.service.auth;
+package com.luyi.myfirst.web.auth.interceptor;
 
 import com.luyi.myfirst.common.exception.AuthErrorEnum;
 import com.luyi.myfirst.common.exception.BizException;

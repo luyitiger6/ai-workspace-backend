@@ -1,7 +1,7 @@
 package com.luyi.myfirst.web.auth;
 
-import com.luyi.myfirst.service.auth.CaptchaIssue;
 import com.luyi.myfirst.service.auth.CaptchaService;
+import com.luyi.myfirst.service.auth.model.CaptchaIssue;
 import com.luyi.myfirst.web.auth.dto.CaptchaResponse;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;

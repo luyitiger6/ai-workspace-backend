@@ -1,7 +1,7 @@
 package com.luyi.myfirst.config;
 
-import com.luyi.myfirst.service.auth.AuthInterceptor;
-import com.luyi.myfirst.service.auth.OriginGuard;
+import com.luyi.myfirst.web.auth.interceptor.AuthInterceptor;
+import com.luyi.myfirst.web.auth.interceptor.OriginGuard;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;

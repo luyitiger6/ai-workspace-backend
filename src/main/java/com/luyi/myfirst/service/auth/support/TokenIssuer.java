@@ -1,7 +1,8 @@
-package com.luyi.myfirst.service.auth;
+package com.luyi.myfirst.service.auth.support;
 
 import com.luyi.myfirst.config.AuthProperties;
 import com.luyi.myfirst.dao.auth.entity.Account;
+import com.luyi.myfirst.service.auth.model.IssuedToken;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.springframework.stereotype.Component;
@@ -19,7 +20,7 @@ import java.util.UUID;
  * 续期就要再写 cookie，而这会把「读接口」变成「写状态」的操作。
  *
  * 令牌只经 cookie 下发——本类不提供任何可直接塞进响应体的结构，
- * 调用方拿到 {@link IssuedToken} 后只能交给 {@link AuthCookie}。
+ * 调用方拿到 {@link IssuedToken} 后只能交给认证 cookie 的唯一写入点（web 层的 AuthCookie）。
  */
 @Component
 public class TokenIssuer {

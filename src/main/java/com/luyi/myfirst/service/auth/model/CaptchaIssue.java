@@ -1,4 +1,4 @@
-package com.luyi.myfirst.service.auth;
+package com.luyi.myfirst.service.auth.model;
 
 /**
  * 一次图形码签发的结果。

@@ -1,4 +1,4 @@
-package com.luyi.myfirst.service.auth;
+package com.luyi.myfirst.service.auth.model;
 
 import java.time.Instant;
 

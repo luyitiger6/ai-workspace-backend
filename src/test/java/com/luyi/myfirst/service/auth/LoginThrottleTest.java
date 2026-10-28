@@ -1,5 +1,7 @@
 package com.luyi.myfirst.service.auth;
 
+import com.luyi.myfirst.service.auth.support.LoginThrottle;
+
 import com.luyi.myfirst.config.AuthProperties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;

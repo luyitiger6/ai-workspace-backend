@@ -1,5 +1,13 @@
 package com.luyi.myfirst.service.auth;
 
+import com.luyi.myfirst.service.auth.impl.CaptchaServiceImpl;
+import com.luyi.myfirst.service.auth.impl.RegisterCodeServiceImpl;
+import com.luyi.myfirst.service.auth.model.CaptchaIssue;
+import com.luyi.myfirst.service.auth.support.CodePurpose;
+import com.luyi.myfirst.service.auth.support.EmailNormalizer;
+import com.luyi.myfirst.service.auth.support.EmailQuotaGuard;
+import com.luyi.myfirst.service.auth.support.OutboxVerificationCodeSender;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.luyi.myfirst.web.auth.dto.RegisterCodeRequest;
 import org.junit.jupiter.api.AfterEach;
@@ -40,10 +48,13 @@ class RegisterCodeTest {
     private static final String CAPTCHA_KEY_PREFIX = "wc:captcha:";
 
     @Autowired
-    private CaptchaService captcha;
+    private CaptchaServiceImpl captcha;
 
     @Autowired
-    private RegisterCodeService registerCodes;
+    private RegisterCodeServiceImpl registerCodes;
+
+    @Autowired
+    private EmailQuotaGuard quota;
 
     @Autowired
     private OutboxVerificationCodeSender outbox;
@@ -108,14 +119,16 @@ class RegisterCodeTest {
     }
 
     @Test
-    @DisplayName("图形码用掉就没了：同一个 captchaId 第二次提交被拒，即使答案仍正确")
+    @DisplayName("图形码用掉就没了：同一个 captchaId 换一个邮箱提交，仍被拒")
     void consumesCaptchaOnFirstUse() throws Exception {
         CaptchaIssue issue = captchaOf("ABCD");
         keyOf("carol@example.com");
 
         post("carol@example.com", issue.captchaId(), "ABCD", true)
                 .andExpect(status().isAccepted());
-        post("carol@example.com", issue.captchaId(), "ABCD", true)
+        // 同邮箱再提一次会先撞上重发冷却（429），看不到「图形码已消耗」这件事；
+        // 冷却按邮箱计，换个邮箱就把它绕开了，撞上的才是图形码本身。
+        post("carol.alt@example.com", issue.captchaId(), "ABCD", true)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("CAPTCHA_INVALID"));
     }
@@ -181,8 +194,11 @@ class RegisterCodeTest {
     }
 
     private String keyOf(String email) {
-        String key = registerCodes.keyOf(EmailNormalizer.normalize(email));
+        String normalized = EmailNormalizer.normalize(email);
+        String key = registerCodes.keyOf(normalized);
         codeKeys.add(key);
+        codeKeys.add(registerCodes.cooldownKeyOf(normalized));
+        codeKeys.add(quota.keyOf(normalized));
         return key;
     }
 

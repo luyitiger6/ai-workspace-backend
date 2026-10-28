@@ -1,4 +1,4 @@
-package com.luyi.myfirst.service.auth;
+package com.luyi.myfirst.service.auth.support;
 
 /**
  * 发码端口（D8）。

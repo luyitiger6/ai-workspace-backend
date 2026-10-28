@@ -1,4 +1,4 @@
-package com.luyi.myfirst.service.auth;
+package com.luyi.myfirst.service.auth.support;
 
 import com.luyi.myfirst.config.AuthProperties;
 import org.springframework.data.redis.core.StringRedisTemplate;

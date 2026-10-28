@@ -1,4 +1,4 @@
-package com.luyi.myfirst.service.auth;
+package com.luyi.myfirst.web.auth;
 
 import com.luyi.myfirst.config.AuthProperties;
 import jakarta.servlet.http.HttpServletResponse;

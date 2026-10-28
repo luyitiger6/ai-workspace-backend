@@ -1,4 +1,4 @@
-package com.luyi.myfirst.service.auth;
+package com.luyi.myfirst.service.auth.support;
 
 import com.luyi.myfirst.common.enums.AccountStatus;
 import com.luyi.myfirst.config.AuthProperties;
@@ -6,6 +6,7 @@ import com.luyi.myfirst.dao.auth.entity.Account;
 import com.luyi.myfirst.dao.auth.entity.AuthSession;
 import com.luyi.myfirst.dao.auth.repository.AccountRepository;
 import com.luyi.myfirst.dao.auth.repository.AuthSessionRepository;
+import com.luyi.myfirst.service.auth.model.VerifiedToken;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;

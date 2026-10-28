@@ -1,4 +1,4 @@
-package com.luyi.myfirst.service.auth;
+package com.luyi.myfirst.service.auth.model;
 
 import com.luyi.myfirst.dao.auth.entity.Account;
 

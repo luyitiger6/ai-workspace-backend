@@ -1,5 +1,6 @@
-package com.luyi.myfirst.service.auth;
+package com.luyi.myfirst.service.auth.support;
 
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -15,8 +16,12 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  *
  * 进程内而非投递记录表：本变更只要求链路可跑通，重启即清空反而是对的——
  * 真实的投递记录该由真实通道产生，模拟件不该留痕。
+ *
+ * `prod` 下不注册，因此生产环境缺真实实现时应用直接启动失败：没有发信能力的
+ * 认证服务看上去能用，却在用户填完表单后才暴露「码没发出去」，比启不来糟得多。
  */
 @Component
+@Profile("!prod")
 public class OutboxVerificationCodeSender implements VerificationCodeSender {
 
     private final Queue<Message> messages = new ConcurrentLinkedQueue<>();

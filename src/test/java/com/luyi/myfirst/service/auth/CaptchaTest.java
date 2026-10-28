@@ -1,5 +1,8 @@
 package com.luyi.myfirst.service.auth;
 
+import com.luyi.myfirst.service.auth.impl.CaptchaServiceImpl;
+import com.luyi.myfirst.service.auth.model.CaptchaIssue;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.luyi.myfirst.web.auth.dto.CaptchaResponse;
 import org.junit.jupiter.api.AfterEach;
@@ -36,7 +39,7 @@ class CaptchaTest {
     private static final String KEY_PREFIX = "wc:captcha:";
 
     @Autowired
-    private CaptchaService captcha;
+    private CaptchaServiceImpl captcha;
 
     @Autowired
     private StringRedisTemplate redis;

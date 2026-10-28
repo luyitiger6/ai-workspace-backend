@@ -1,6 +1,7 @@
 package com.luyi.myfirst.service.auth;
 
 import com.luyi.myfirst.config.AuthProperties;
+import com.luyi.myfirst.web.auth.AuthCookie;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
