@@ -109,15 +109,22 @@ class SimulatedSenderGuardTest {
     }
 
     @Test
-    @DisplayName("端点清单：/api/auth 下只有登记过的四个端点，没有读验证码的接口")
+    @DisplayName("端点清单：/api/auth 下只有登记过的七个端点，没有读验证码的接口")
     void authEndpointsAreExactlyTheRegisteredOnes() {
         // 新增端点必须显式加到这里：让「悄悄多出一个能读码的接口」变成一次红灯，
         // 而不是上线后在日志里发现。
+        //
+        // 5.6 的 me / logout / account 三个端点也不在公开清单里（WebMvcConfig 只排除
+        // 那六个公开路径），但它们仍要登记：这条用例管的是「谁在 /api/auth 下挂了映射」，
+        // 不是「谁能匿名访问」。混为一谈会漏掉「受保护的调试端点」这一类。
         assertThat(authEndpoints()).containsExactlyInAnyOrder(
                 "GET /api/auth/captcha",
                 "POST /api/auth/login",
                 "POST /api/auth/register",
-                "POST /api/auth/register-code");
+                "POST /api/auth/register-code",
+                "GET /api/auth/me",
+                "POST /api/auth/logout",
+                "DELETE /api/auth/account");
     }
 
     @Test

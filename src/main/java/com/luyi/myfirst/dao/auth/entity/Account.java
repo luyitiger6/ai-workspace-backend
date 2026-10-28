@@ -12,6 +12,8 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import org.hibernate.annotations.Generated;
+import org.hibernate.generator.EventType;
 
 import java.time.Instant;
 
@@ -60,7 +62,14 @@ public class Account {
     @Column(nullable = false)
     private int version;
 
-    /** 库侧默认值填充，Java 端只读。 */
+    /**
+     * 库侧默认值填充，Java 端只读。
+     *
+     * {@code @Generated(INSERT)} 让 Hibernate 在插入后把该列读回来：
+     * 不读的话，刚注册的账户在同一个请求里读到的就是 null，
+     * {@code /me} 会把它当「创建时间为空」序列化出去。
+     */
+    @Generated(event = EventType.INSERT)
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
 
