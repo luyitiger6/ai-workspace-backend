@@ -18,6 +18,7 @@ import com.luyi.myfirst.web.auth.AuthCookie;
 import com.luyi.myfirst.web.auth.dto.LoginRequest;
 import com.luyi.myfirst.web.auth.dto.PasswordResetCodeRequest;
 import com.luyi.myfirst.web.auth.dto.PasswordResetRequest;
+import com.luyi.myfirst.web.auth.dto.RegisterCodeRequest;
 import com.luyi.myfirst.web.auth.interceptor.SourceKeyResolver;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -378,6 +379,42 @@ class PasswordResetTest {
         login(REGISTERED, OLD_PASSWORD).andExpect(status().isUnauthorized());
     }
 
+    @Test
+    @DisplayName("注册码与重置码共用日配额：注册额度用尽后重置码也是 429，且两者 Retry-After 指向同一时刻")
+    void resetCodeSharesTheDailyQuotaWithRegisterCode() throws Exception {
+        persistAccount(REGISTERED);
+        String normalized = EmailNormalizer.normalize(REGISTERED);
+
+        // 已注册邮箱请求注册码照常烧图形码、占日配额（5.2 的「消耗相同」），正好用来把额度用尽。
+        for (int used = 1; used <= 5; used++) {
+            clearCooldown(REGISTERED);
+            requestRegisterCode(REGISTERED).andExpect(status().isAccepted());
+        }
+        assertThat(redis.opsForValue().get(quota.keyOf(normalized))).isEqualTo("5");
+
+        clearCooldown(REGISTERED);
+        MvcResult exhaustedRegister = requestRegisterCode(REGISTERED)
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("RATE_LIMITED"))
+                .andReturn();
+
+        MvcResult exhaustedReset = requestResetCode(REGISTERED)
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("RATE_LIMITED"))
+                .andReturn();
+
+        String registerRetryAfter = exhaustedRegister.getResponse().getHeader(HttpHeaders.RETRY_AFTER);
+        String resetRetryAfter = exhaustedReset.getResponse().getHeader(HttpHeaders.RETRY_AFTER);
+        assertThat(registerRetryAfter).isNotNull();
+        // 两个端点算的是同一个「次日零点」，不是各自从此刻起数一个窗口：
+        // 一份自然日额度只能有一个恢复时刻。
+        assertThat(resetRetryAfter).isEqualTo(registerRetryAfter);
+        assertThat(Long.parseLong(registerRetryAfter)).isBetween(1L, 86_400L);
+
+        // 配额挡的是发码，不是账户：旧密码照样能登录。
+        login(REGISTERED, OLD_PASSWORD).andExpect(status().isOk());
+    }
+
     private Account persistAccount(String email) {
         return accounts.save(Account.createActive(
                 Ulid.generate(), email, hasher.hash(OLD_PASSWORD), "Probe"));
@@ -391,18 +428,37 @@ class PasswordResetTest {
 
     /** 走真实端点取码，明文码从 outbox 读——它是唯一能看到码的地方（D8）。 */
     private String issueResetCode(String email) throws Exception {
-        CaptchaIssue issue = captchaOf();
-        String body = objectMapper.writeValueAsString(
-                new PasswordResetCodeRequest(email, issue.captchaId(), CAPTCHA_ANSWER));
-        mockMvc.perform(MockMvcRequestBuilders.post("/api/auth/password-reset-code")
-                        .header(HttpHeaders.ORIGIN, ORIGIN)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(body))
-                .andExpect(status().isAccepted());
+        requestResetCode(email).andExpect(status().isAccepted());
 
         List<OutboxVerificationCodeSender.Message> messages = outbox.messages();
         assertThat(messages).isNotEmpty();
         return messages.get(messages.size() - 1).code();
+    }
+
+    /** 重置码请求本身（状态码由调用方断言：7.6 要断言 429，取码用例要断言 202）。 */
+    private ResultActions requestResetCode(String email) throws Exception {
+        CaptchaIssue issue = captchaOf();
+        String body = objectMapper.writeValueAsString(
+                new PasswordResetCodeRequest(email, issue.captchaId(), CAPTCHA_ANSWER));
+        return mockMvc.perform(MockMvcRequestBuilders.post("/api/auth/password-reset-code")
+                .header(HttpHeaders.ORIGIN, ORIGIN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body));
+    }
+
+    private ResultActions requestRegisterCode(String email) throws Exception {
+        CaptchaIssue issue = captchaOf();
+        String body = objectMapper.writeValueAsString(
+                new RegisterCodeRequest(email, issue.captchaId(), CAPTCHA_ANSWER));
+        return mockMvc.perform(MockMvcRequestBuilders.post("/api/auth/register-code")
+                .header(HttpHeaders.ORIGIN, ORIGIN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body));
+    }
+
+    /** 冷却键跨用途共用；要连续发码就得把它清掉（冷却本身的行为由 7.1 看守）。 */
+    private void clearCooldown(String email) {
+        redis.delete(registerCodes.cooldownKeyOf(EmailNormalizer.normalize(email)));
     }
 
     private ResultActions submitReset(String email, String code, String newPassword) throws Exception {
