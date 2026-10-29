@@ -75,6 +75,21 @@ class AuthCookieTest {
         assertThat(header).contains("SameSite=Lax");
     }
 
+    @Test
+    @DisplayName("从不下发 Domain：cookie 的作用域锁在当前主机，不被同父域下的其它站点共享")
+    void neverWritesDomainAttribute() {
+        MockHttpServletResponse issued = new MockHttpServletResponse();
+        MockHttpServletResponse cleared = new MockHttpServletResponse();
+        AuthCookie cookie = new AuthCookie(properties(false));
+
+        cookie.write(issued, TOKEN);
+        cookie.clear(cleared);
+
+        // Domain 缺省即「仅当前主机」；一旦写上父域，同一父域下的任意站点都能收到令牌 cookie。
+        assertThat(issued.getHeader(HttpHeaders.SET_COOKIE)).doesNotContain("Domain");
+        assertThat(cleared.getHeader(HttpHeaders.SET_COOKIE)).doesNotContain("Domain");
+    }
+
     private static AuthProperties properties(boolean cookieSecure) {
         return new AuthProperties(
                 Duration.ofDays(7),
