@@ -79,9 +79,10 @@ public class AuthInterceptor implements HandlerInterceptor {
         routes.put("/api/auth/password-reset-code", Set.of("POST"));
         routes.put("/api/auth/password-reset", Set.of("POST"));
         routes.put("/api/auth/login", Set.of("POST"));
-        // 帖子域只公开读：列表与详情。
+        // 帖子域只公开读：列表、详情、评论列表。
         routes.put("/api/posts", Set.of("GET"));
         routes.put("/api/posts/*", Set.of("GET"));
+        routes.put("/api/posts/*/comments", Set.of("GET"));
         return Map.copyOf(routes);
     }
 

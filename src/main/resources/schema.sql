@@ -74,3 +74,77 @@ CREATE TABLE IF NOT EXISTS posts (
   CONSTRAINT ck_posts_status CHECK (status IN ('draft', 'published')),
   CONSTRAINT ck_posts_version CHECK (version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS post_comments (
+  id          BIGINT       NOT NULL AUTO_INCREMENT,
+  public_id   CHAR(26)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  post_id     BIGINT       NOT NULL,
+  account_id  BIGINT       NOT NULL,
+  parent_id   BIGINT       NULL,
+  content     VARCHAR(2000) NOT NULL,
+  created_at  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  deleted_at  DATETIME(3)  NULL,
+  version     INT          NOT NULL DEFAULT 0,
+  created_by  BIGINT       NULL,
+  updated_by  BIGINT       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_post_comments_public_id (public_id),
+  KEY idx_post_comments_post (post_id, deleted_at, created_at DESC),
+  KEY idx_post_comments_parent (parent_id),
+  CONSTRAINT fk_post_comments_post FOREIGN KEY (post_id) REFERENCES posts (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_post_comments_account FOREIGN KEY (account_id) REFERENCES accounts (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_post_comments_parent FOREIGN KEY (parent_id) REFERENCES post_comments (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_post_comments_version CHECK (version >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS post_votes (
+  id                BIGINT       NOT NULL AUTO_INCREMENT,
+  public_id         CHAR(26)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  post_id           BIGINT       NOT NULL,
+  account_id        BIGINT       NOT NULL,
+  direction         VARCHAR(8)   CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'up',
+  created_at        DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at        DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  deleted_at        DATETIME(3)  NULL,
+  active_account_id BIGINT       GENERATED ALWAYS AS (IF(deleted_at IS NULL, account_id, NULL)) STORED,
+  version           INT          NOT NULL DEFAULT 0,
+  created_by        BIGINT       NULL,
+  updated_by        BIGINT       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_post_votes_public_id (public_id),
+  UNIQUE KEY uk_post_votes_active (post_id, active_account_id),
+  KEY idx_post_votes_post (post_id, deleted_at),
+  CONSTRAINT fk_post_votes_post FOREIGN KEY (post_id) REFERENCES posts (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_post_votes_account FOREIGN KEY (account_id) REFERENCES accounts (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_post_votes_direction CHECK (direction IN ('up', 'down')),
+  CONSTRAINT ck_post_votes_version CHECK (version >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS post_bookmarks (
+  id                BIGINT       NOT NULL AUTO_INCREMENT,
+  public_id         CHAR(26)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  post_id           BIGINT       NOT NULL,
+  account_id        BIGINT       NOT NULL,
+  created_at        DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at        DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  deleted_at        DATETIME(3)  NULL,
+  active_account_id BIGINT       GENERATED ALWAYS AS (IF(deleted_at IS NULL, account_id, NULL)) STORED,
+  version           INT          NOT NULL DEFAULT 0,
+  created_by        BIGINT       NULL,
+  updated_by        BIGINT       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_post_bookmarks_public_id (public_id),
+  UNIQUE KEY uk_post_bookmarks_active (post_id, active_account_id),
+  KEY idx_post_bookmarks_post (post_id, deleted_at),
+  CONSTRAINT fk_post_bookmarks_post FOREIGN KEY (post_id) REFERENCES posts (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_post_bookmarks_account FOREIGN KEY (account_id) REFERENCES accounts (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_post_bookmarks_version CHECK (version >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

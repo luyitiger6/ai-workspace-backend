@@ -29,6 +29,12 @@ public interface PostService {
     /** 详情：已发布对所有人可见，草稿仅作者可见（他人得 404 而非 403）。 */
     PostView read(String postPublicId, VerifiedToken viewer);
 
-    /** 列表：只含已发布，游标分页；{@code cursor} 为 null 表示第一页。 */
-    PostPage feed(String cursor, Integer limit);
+    /**
+     * 列表：只含已发布，游标分页；{@code cursor} 为 null 表示第一页。
+     *
+     * {@code sortBy} 为 null / 空白时默认按 {@code publishedAt} 排序；非法取值抛
+     * {@code VALIDATION_FAILED}。游标携带自己的排序维度，与请求中的 {@code sortBy}
+     * 不一致时也判为非法游标。
+     */
+    PostPage feed(String sortBy, String cursor, Integer limit);
 }

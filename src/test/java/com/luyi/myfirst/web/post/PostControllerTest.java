@@ -131,21 +131,47 @@ class PostControllerTest {
                 .andExpect(jsonPath("$.nextCursor").value(nullValue()));
     }
 
+    @Test
+    @DisplayName("列表支持 sortBy 查询参数并返回统计字段")
+    void feedWithSortByAndStats() throws Exception {
+        Cookie cookie = authCookie("作者甲");
+        String publicId = createPostReturningId(cookie, "排序测试");
+
+        mockMvc.perform(get("/api/posts?sortBy=upVoteCount"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[?(@.publicId=='" + publicId + "')].upVoteCount").value(0))
+                .andExpect(jsonPath("$.items[?(@.publicId=='" + publicId + "')].commentCount").value(0))
+                .andExpect(jsonPath("$.items[?(@.publicId=='" + publicId + "')].bookmarkCount").value(0));
+    }
+
+    @Test
+    @DisplayName("非法 sortBy：400 VALIDATION_FAILED")
+    void invalidSortByIsRejected() throws Exception {
+        mockMvc.perform(get("/api/posts?sortBy=hot"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    }
+
     // ---------- 5.2 字段白名单 ----------
 
     @Test
     @DisplayName("响应字段集合等于白名单，且不含内部字段")
     void responseFieldsMatchWhitelist() {
-        Set<String> whitelist = Set.of(
+        Set<String> detailWhitelist = Set.of(
                 "publicId", "title", "content", "coverImage", "tags",
                 "status", "authorPublicId", "createdAt", "updatedAt");
+        Set<String> summaryWhitelist = Set.of(
+                "publicId", "title", "coverImage", "tags", "status", "authorPublicId",
+                "createdAt", "updatedAt", "commentCount", "upVoteCount", "bookmarkCount");
         Set<String> detail = recordComponentNames(PostResponse.class);
         Set<String> summary = recordComponentNames(PostSummaryResponse.class);
 
-        assertThat(detail).containsExactlyInAnyOrderElementsOf(whitelist);
-        assertThat(summary).isSubsetOf(whitelist);
+        assertThat(detail).containsExactlyInAnyOrderElementsOf(detailWhitelist);
+        assertThat(summary).containsExactlyInAnyOrderElementsOf(summaryWhitelist);
         assertThat(summary).doesNotContain("content");
         assertThat(detail).doesNotContain(
+                "id", "deletedAt", "version", "createdBy", "updatedBy", "publishedAt");
+        assertThat(summary).doesNotContain(
                 "id", "deletedAt", "version", "createdBy", "updatedBy", "publishedAt");
     }
 

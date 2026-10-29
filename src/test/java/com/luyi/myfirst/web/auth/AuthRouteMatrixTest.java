@@ -45,7 +45,10 @@ class AuthRouteMatrixTest {
     private MockMvc mockMvc;
 
     static Stream<Arguments> routeMatrix() {
+        String postId = "postid0000000000000000001";
+        String commentId = "commentid00000000000000001";
         return Stream.of(
+                // 认证域
                 Arguments.of("GET", "/api/auth/captcha", true),
                 Arguments.of("POST", "/api/auth/register-code", true),
                 Arguments.of("POST", "/api/auth/register", true),
@@ -54,7 +57,20 @@ class AuthRouteMatrixTest {
                 Arguments.of("POST", "/api/auth/login", true),
                 Arguments.of("POST", "/api/auth/logout", false),
                 Arguments.of("GET", "/api/auth/me", false),
-                Arguments.of("DELETE", "/api/auth/account", false));
+                Arguments.of("DELETE", "/api/auth/account", false),
+                // 帖子域：读公开，写受保护
+                Arguments.of("GET", "/api/posts", true),
+                Arguments.of("GET", "/api/posts/" + postId, true),
+                Arguments.of("GET", "/api/posts/" + postId + "/comments", true),
+                Arguments.of("POST", "/api/posts", false),
+                Arguments.of("PUT", "/api/posts/" + postId, false),
+                Arguments.of("DELETE", "/api/posts/" + postId, false),
+                Arguments.of("POST", "/api/posts/" + postId + "/comments", false),
+                Arguments.of("DELETE", "/api/posts/" + postId + "/comments/" + commentId, false),
+                Arguments.of("POST", "/api/posts/" + postId + "/votes", false),
+                Arguments.of("DELETE", "/api/posts/" + postId + "/votes", false),
+                Arguments.of("POST", "/api/posts/" + postId + "/bookmarks", false),
+                Arguments.of("DELETE", "/api/posts/" + postId + "/bookmarks", false));
     }
 
     @ParameterizedTest(name = "{0} {1} 公开={2}")

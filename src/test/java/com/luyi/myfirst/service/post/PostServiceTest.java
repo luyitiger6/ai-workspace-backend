@@ -1,6 +1,7 @@
 package com.luyi.myfirst.service.post;
 
 import com.luyi.myfirst.common.enums.PostStatus;
+import com.luyi.myfirst.common.enums.VoteDirection;
 import com.luyi.myfirst.common.exception.AuthErrorEnum;
 import com.luyi.myfirst.common.exception.BizException;
 import com.luyi.myfirst.common.exception.PostErrorEnum;
@@ -10,6 +11,9 @@ import com.luyi.myfirst.dao.auth.repository.AccountRepository;
 import com.luyi.myfirst.dao.post.entity.Post;
 import com.luyi.myfirst.dao.post.repository.PostRepository;
 import com.luyi.myfirst.service.auth.model.VerifiedToken;
+import com.luyi.myfirst.service.post.interaction.PostInteractionService;
+import com.luyi.myfirst.service.post.interaction.model.CommentCreateCommand;
+import com.luyi.myfirst.service.post.interaction.model.VoteCreateCommand;
 import com.luyi.myfirst.service.post.model.PostCommand;
 import com.luyi.myfirst.service.post.model.PostPage;
 import com.luyi.myfirst.service.post.model.PostSummary;
@@ -50,6 +54,9 @@ class PostServiceTest {
 
     @Autowired
     private EntityManager entityManager;
+
+    @Autowired
+    private PostInteractionService interactions;
 
     // ---------- R2 发布需登录且作者取自令牌 ----------
 
@@ -168,7 +175,7 @@ class PostServiceTest {
         VerifiedToken author = newToken("作者甲");
         PostView created = service.publish(author, published("公开可见"));
 
-        PostPage page = service.feed(null, null);
+        PostPage page = service.feed(null, null, null);
 
         assertThat(page.items()).extracting(PostSummary::publicId).contains(created.publicId());
         assertThat(page.nextCursor()).isNull();
@@ -180,7 +187,7 @@ class PostServiceTest {
         VerifiedToken author = newToken("作者甲");
         PostView draft = service.publish(author, draft("还没写完"));
 
-        PostPage page = service.feed(null, 50);
+        PostPage page = service.feed(null, null, 50);
 
         assertThat(page.items()).extracting(PostSummary::publicId).doesNotContain(draft.publicId());
     }
@@ -194,14 +201,14 @@ class PostServiceTest {
             publishedIds.add(service.publish(author, published("第 " + index + " 篇")).publicId());
         }
 
-        PostPage first = service.feed(null, 2);
+        PostPage first = service.feed(null, null, 2);
         assertThat(first.items()).hasSize(2);
         assertThat(first.nextCursor()).isNotNull();
 
         // 翻页途中新增一条：keyset 只认 (published_at, id)，新帖排在前面，不会挤进第二页。
         service.publish(author, published("插队的新帖"));
 
-        PostPage second = service.feed(first.nextCursor(), 2);
+        PostPage second = service.feed(null, first.nextCursor(), 2);
         List<String> firstIds = first.items().stream().map(PostSummary::publicId).toList();
         List<String> secondIds = second.items().stream().map(PostSummary::publicId).toList();
 
@@ -213,7 +220,7 @@ class PostServiceTest {
     @Test
     @DisplayName("非法游标：400 VALIDATION_FAILED")
     void brokenCursorIsRejected() {
-        BizException error = rejectionOf(() -> service.feed("not-a-cursor", 20));
+        BizException error = rejectionOf(() -> service.feed(null, "not-a-cursor", 20));
 
         assertThat(error.getErrorCode()).isEqualTo(AuthErrorEnum.VALIDATION_FAILED.getErrorCode());
         assertThat(error.getHttpStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
@@ -227,10 +234,84 @@ class PostServiceTest {
             service.publish(author, published("批量 " + index));
         }
 
-        PostPage page = service.feed(null, 500);
+        PostPage page = service.feed(null, null, 500);
 
         assertThat(page.items()).hasSize(50);
         assertThat(page.nextCursor()).isNotNull();
+    }
+
+    // ---------- R4 补充：排序切换、游标不混用、列表项含统计 ----------
+
+    @Test
+    @DisplayName("列表项默认携带三个互动统计字段，无互动时为 0")
+    void feedSummaryCarriesInteractionCounts() {
+        VerifiedToken author = newToken("作者甲");
+        PostView post = service.publish(author, published("统计测试"));
+
+        PostSummary summary = service.feed(null, null, 10).items().stream()
+                .filter(item -> item.publicId().equals(post.publicId()))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(summary.commentCount()).isEqualTo(0L);
+        assertThat(summary.upVoteCount()).isEqualTo(0L);
+        assertThat(summary.bookmarkCount()).isEqualTo(0L);
+    }
+
+    @Test
+    @DisplayName("按点赞数排序：被点赞帖子排在前面")
+    void feedByUpVoteCount() {
+        VerifiedToken author = newToken("作者甲");
+        PostView first = service.publish(author, published("先发布"));
+        PostView second = service.publish(author, published("后发布"));
+        interactions.vote(author, first.publicId(), new VoteCreateCommand(VoteDirection.UP));
+
+        PostPage page = service.feed("upVoteCount", null, 10);
+
+        assertThat(page.items()).extracting(PostSummary::publicId).startsWith(first.publicId());
+        assertThat(page.items().get(0).upVoteCount()).isEqualTo(1L);
+        assertThat(page.items().stream()
+                .filter(item -> item.publicId().equals(second.publicId()))
+                .findFirst()
+                .orElseThrow()
+                .upVoteCount()).isEqualTo(0L);
+    }
+
+    @Test
+    @DisplayName("按评论数排序：被评论帖子排在前面")
+    void feedByCommentCount() {
+        VerifiedToken author = newToken("作者甲");
+        PostView first = service.publish(author, published("有评论"));
+        PostView second = service.publish(author, published("无评论"));
+        interactions.createComment(author, first.publicId(), new CommentCreateCommand("一条评论", null));
+
+        PostPage page = service.feed("commentCount", null, 10);
+
+        assertThat(page.items()).extracting(PostSummary::publicId).startsWith(first.publicId());
+        assertThat(page.items().get(0).commentCount()).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("不同排序的游标不混用：publishedAt 游标塞进 upVoteCount 请求报 400")
+    void cursorSortMismatchIsRejected() {
+        VerifiedToken author = newToken("作者甲");
+        service.publish(author, published("第一页"));
+        service.publish(author, published("第二页"));
+
+        PostPage first = service.feed(null, null, 1);
+        assertThat(first.nextCursor()).isNotNull();
+
+        BizException error = rejectionOf(() -> service.feed("upVoteCount", first.nextCursor(), 10));
+        assertThat(error.getErrorCode()).isEqualTo(AuthErrorEnum.VALIDATION_FAILED.getErrorCode());
+        assertThat(error.getHttpStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    @DisplayName("非法 sortBy：400 VALIDATION_FAILED")
+    void invalidSortByIsRejected() {
+        BizException error = rejectionOf(() -> service.feed("hot", null, 10));
+        assertThat(error.getErrorCode()).isEqualTo(AuthErrorEnum.VALIDATION_FAILED.getErrorCode());
+        assertThat(error.getHttpStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
     // ---------- R5 详情公开且草稿对他人不可见 ----------

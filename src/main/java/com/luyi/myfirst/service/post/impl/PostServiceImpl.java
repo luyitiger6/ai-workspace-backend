@@ -1,13 +1,18 @@
 package com.luyi.myfirst.service.post.impl;
 
+import com.luyi.myfirst.common.enums.PostSortBy;
 import com.luyi.myfirst.common.enums.PostStatus;
+import com.luyi.myfirst.common.exception.AuthErrorEnum;
 import com.luyi.myfirst.common.exception.BizException;
 import com.luyi.myfirst.common.exception.PostErrorEnum;
 import com.luyi.myfirst.common.id.Ulid;
 import com.luyi.myfirst.dao.auth.entity.Account;
 import com.luyi.myfirst.dao.auth.repository.AccountRepository;
 import com.luyi.myfirst.dao.post.entity.Post;
+import com.luyi.myfirst.dao.post.repository.BookmarkRepository;
+import com.luyi.myfirst.dao.post.repository.CommentRepository;
 import com.luyi.myfirst.dao.post.repository.PostRepository;
+import com.luyi.myfirst.dao.post.repository.VoteRepository;
 import com.luyi.myfirst.service.auth.model.VerifiedToken;
 import com.luyi.myfirst.service.post.PostService;
 import com.luyi.myfirst.service.post.model.PostCommand;
@@ -50,10 +55,20 @@ public class PostServiceImpl implements PostService {
 
     private final PostRepository posts;
     private final AccountRepository accounts;
+    private final CommentRepository comments;
+    private final VoteRepository votes;
+    private final BookmarkRepository bookmarks;
 
-    public PostServiceImpl(PostRepository posts, AccountRepository accounts) {
+    public PostServiceImpl(PostRepository posts,
+                           AccountRepository accounts,
+                           CommentRepository comments,
+                           VoteRepository votes,
+                           BookmarkRepository bookmarks) {
         this.posts = posts;
         this.accounts = accounts;
+        this.comments = comments;
+        this.votes = votes;
+        this.bookmarks = bookmarks;
     }
 
     @Override
@@ -112,29 +127,82 @@ public class PostServiceImpl implements PostService {
 
     @Override
     @Transactional(readOnly = true)
-    public PostPage feed(String cursor, Integer limit) {
+    public PostPage feed(String sortBy, String cursor, Integer limit) {
+        PostSortBy resolvedSort = resolveSortBy(sortBy);
         int size = normalizeLimit(limit);
         FeedCursor after = FeedCursor.decode(cursor);
-        // 多取一条用来判定「还有下一页」：靠 size 条数据反推必然要么多发一次空请求，
-        // 要么在恰好整页时给出错误的 nextCursor。
+        if (after != null && after.sortBy() != resolvedSort) {
+            throw new BizException(AuthErrorEnum.VALIDATION_FAILED);
+        }
+
         Pageable pageable = PageRequest.of(0, size + 1);
-        List<Post> rows = after == null
-                ? posts.findFeed(PostStatus.PUBLISHED, pageable)
-                : posts.findFeedAfter(PostStatus.PUBLISHED, after.publishedAt(), after.id(), pageable);
+        List<Post> rows = fetchPage(resolvedSort, after, pageable);
 
         boolean hasMore = rows.size() > size;
         List<Post> page = hasMore ? rows.subList(0, size) : rows;
         Map<Long, String> authorPublicIds = authorPublicIdsOf(page);
+        Map<Long, InteractionCounts> counts = countsOf(page);
         List<PostSummary> items = page.stream()
-                .map(post -> toSummary(post, authorPublicIds.get(post.authorId())))
+                .map(post -> toSummary(post, authorPublicIds.get(post.authorId()), counts.get(post.id())))
                 .toList();
 
         String nextCursor = null;
         if (hasMore) {
             Post last = page.get(page.size() - 1);
-            nextCursor = new FeedCursor(last.publishedAt(), last.id()).encode();
+            nextCursor = new FeedCursor(
+                    resolvedSort,
+                    last.publishedAt(),
+                    scoreOf(last, resolvedSort, counts.get(last.id())),
+                    last.id()).encode();
         }
         return new PostPage(items, nextCursor);
+    }
+
+    private List<Post> fetchPage(PostSortBy sortBy, FeedCursor after, Pageable pageable) {
+        if (after == null) {
+            return switch (sortBy) {
+                case PUBLISHED_AT -> posts.findFeed(PostStatus.PUBLISHED, pageable);
+                case UP_VOTE_COUNT -> posts.findFeedByUpVoteCount(PostStatus.PUBLISHED, pageable);
+                case COMMENT_COUNT -> posts.findFeedByCommentCount(PostStatus.PUBLISHED, pageable);
+            };
+        }
+        return switch (sortBy) {
+            case PUBLISHED_AT -> posts.findFeedAfter(
+                    PostStatus.PUBLISHED, after.publishedAt(), after.id(), pageable);
+            case UP_VOTE_COUNT -> posts.findFeedByUpVoteCountAfter(
+                    PostStatus.PUBLISHED, after.score(), after.publishedAt(), after.id(), pageable);
+            case COMMENT_COUNT -> posts.findFeedByCommentCountAfter(
+                    PostStatus.PUBLISHED, after.score(), after.publishedAt(), after.id(), pageable);
+        };
+    }
+
+    private static Long scoreOf(Post post, PostSortBy sortBy, InteractionCounts counts) {
+        if (counts == null) {
+            return null;
+        }
+        return switch (sortBy) {
+            case PUBLISHED_AT -> null;
+            case UP_VOTE_COUNT -> counts.upVoteCount();
+            case COMMENT_COUNT -> counts.commentCount();
+        };
+    }
+
+    private static PostSortBy resolveSortBy(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return PostSortBy.PUBLISHED_AT;
+        }
+        return PostSortBy.fromDbValue(raw).orElseThrow(() -> new BizException(AuthErrorEnum.VALIDATION_FAILED));
+    }
+
+    private Map<Long, InteractionCounts> countsOf(List<Post> page) {
+        Map<Long, InteractionCounts> result = new HashMap<>();
+        for (Post post : page) {
+            long commentCount = comments.countByPostIdAndDeletedAtIsNull(post.id());
+            long upVoteCount = votes.countByPostIdAndDirectionAndDeletedAtIsNull(post.id(), com.luyi.myfirst.common.enums.VoteDirection.UP);
+            long bookmarkCount = bookmarks.countByPostIdAndDeletedAtIsNull(post.id());
+            result.put(post.id(), new InteractionCounts(commentCount, upVoteCount, bookmarkCount));
+        }
+        return result;
     }
 
     private Post requireExisting(String postPublicId) {
@@ -190,7 +258,7 @@ public class PostServiceImpl implements PostService {
                 post.updatedAt());
     }
 
-    private static PostSummary toSummary(Post post, String authorPublicId) {
+    private static PostSummary toSummary(Post post, String authorPublicId, InteractionCounts counts) {
         return new PostSummary(
                 post.publicId(),
                 post.title(),
@@ -199,10 +267,16 @@ public class PostServiceImpl implements PostService {
                 post.status(),
                 authorPublicId,
                 post.createdAt(),
-                post.updatedAt());
+                post.updatedAt(),
+                counts == null ? 0L : counts.commentCount(),
+                counts == null ? 0L : counts.upVoteCount(),
+                counts == null ? 0L : counts.bookmarkCount());
     }
 
     private static BizException notFound() {
         return new BizException(PostErrorEnum.POST_NOT_FOUND);
+    }
+
+    private record InteractionCounts(long commentCount, long upVoteCount, long bookmarkCount) {
     }
 }

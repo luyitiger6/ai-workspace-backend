@@ -85,9 +85,10 @@ public class PostController {
 
     @GetMapping
     ResponseEntity<PostFeedResponse> feed(
+            @RequestParam(required = false) String sortBy,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) Integer limit) {
-        PostPage page = postService.feed(cursor, limit);
+        PostPage page = postService.feed(sortBy, cursor, limit);
         return ResponseEntity.ok(new PostFeedResponse(
                 page.items().stream().map(PostController::toSummary).toList(),
                 page.nextCursor()));
@@ -142,6 +143,9 @@ public class PostController {
                 summary.status().dbValue(),
                 summary.authorPublicId(),
                 summary.createdAt(),
-                summary.updatedAt());
+                summary.updatedAt(),
+                summary.commentCount(),
+                summary.upVoteCount(),
+                summary.bookmarkCount());
     }
 }
