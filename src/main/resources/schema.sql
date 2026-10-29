@@ -44,3 +44,33 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
     ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT ck_auth_sessions_expires CHECK (expires_at > issued_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS posts (
+  id           BIGINT       NOT NULL AUTO_INCREMENT,
+  public_id    CHAR(26)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  author_id    BIGINT       NOT NULL,
+  title        VARCHAR(120) NOT NULL,
+  -- 正文是正文不是元数据，按 §6 用 MEDIUMTEXT；应用层另卡 65535 字节上限。
+  content      MEDIUMTEXT   NOT NULL,
+  cover_image  VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL,
+  -- 标签是元数据用 JSON；按 §8.1 不对 JSON 做函数过滤，本阶段不做按标签筛选。
+  tags         JSON         NULL,
+  status       VARCHAR(16)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'draft',
+  -- 排序键独立成列：先存草稿后发布时，created_at 会把新发布的帖排到老帖前面。
+  published_at DATETIME(3)  NULL,
+  created_at   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  deleted_at   DATETIME(3)  NULL,
+  version      INT          NOT NULL DEFAULT 0,
+  created_by   BIGINT       NULL,
+  updated_by   BIGINT       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_posts_public_id (public_id),
+  -- 首页 feed 的形态：(等值列…, deleted_at, 排序列 DESC, id DESC)
+  KEY idx_posts_feed (status, deleted_at, published_at DESC, id DESC),
+  KEY idx_posts_author (author_id, deleted_at, created_at DESC),
+  CONSTRAINT fk_posts_author FOREIGN KEY (author_id) REFERENCES accounts (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_posts_status CHECK (status IN ('draft', 'published')),
+  CONSTRAINT ck_posts_version CHECK (version >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
