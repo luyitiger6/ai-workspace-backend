@@ -314,6 +314,48 @@ class PostServiceTest {
         assertThat(error.getHttpStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
+    @Test
+    @DisplayName("发布、读取和编辑详情均返回三项零值统计")
+    void detailShapesCarryZeroCounts() {
+        VerifiedToken author = newToken("详情作者");
+        PostView created = service.publish(author, published("详情统计"));
+        assertCounts(created, 0, 0, 0);
+        assertCounts(service.read(created.publicId(), null), 0, 0, 0);
+        assertCounts(service.edit(author, created.publicId(), published("编辑后")), 0, 0, 0);
+    }
+
+    @Test
+    @DisplayName("详情与列表同口径：只统计有效评论、赞成票与收藏，排除软删除和反对票")
+    void detailCountsExcludeDeletedInteractionsAndDownVotes() {
+        VerifiedToken author = newToken("详情作者");
+        VerifiedToken upVoter = newToken("赞成账户");
+        VerifiedToken downVoter = newToken("反对账户");
+        PostView post = service.publish(author, published("有效统计"));
+        String publicId = post.publicId();
+        var comment = interactions.createComment(author, publicId, new CommentCreateCommand("评论", null));
+        interactions.vote(upVoter, publicId, new VoteCreateCommand(VoteDirection.UP));
+        interactions.vote(downVoter, publicId, new VoteCreateCommand(VoteDirection.DOWN));
+        interactions.bookmark(author, publicId);
+        interactions.bookmark(downVoter, publicId);
+
+        assertCounts(service.read(publicId, null), 1, 1, 2);
+        assertCounts(service.edit(author, publicId, published("编辑保留统计")), 1, 1, 2);
+        PostSummary summary = service.feed(null, null, 50).items().stream()
+                .filter(item -> item.publicId().equals(publicId)).findFirst().orElseThrow();
+        assertThat(summary.commentCount()).isEqualTo(1L);
+        assertThat(summary.upVoteCount()).isEqualTo(1L);
+        assertThat(summary.bookmarkCount()).isEqualTo(2L);
+
+        interactions.cancelVote(downVoter, publicId);
+        assertCounts(service.read(publicId, null), 1, 1, 2);
+        interactions.deleteComment(author, publicId, comment.publicId());
+        interactions.cancelVote(upVoter, publicId);
+        interactions.cancelBookmark(downVoter, publicId);
+        assertCounts(service.read(publicId, null), 0, 0, 1);
+        interactions.cancelBookmark(author, publicId);
+        assertCounts(service.read(publicId, author), 0, 0, 0);
+    }
+
     // ---------- R5 详情公开且草稿对他人不可见 ----------
 
     @Test
@@ -478,6 +520,12 @@ class PostServiceTest {
     }
 
     // ---------- 夹具 ----------
+
+    private static void assertCounts(PostView view, long comments, long upVotes, long bookmarks) {
+        assertThat(view.commentCount()).isEqualTo(comments);
+        assertThat(view.upVoteCount()).isEqualTo(upVotes);
+        assertThat(view.bookmarkCount()).isEqualTo(bookmarks);
+    }
 
     private VerifiedToken newToken(String displayName) {
         String publicId = Ulid.generate();

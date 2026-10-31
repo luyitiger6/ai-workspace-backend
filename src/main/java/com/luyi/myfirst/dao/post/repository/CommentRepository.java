@@ -23,7 +23,12 @@ public interface CommentRepository extends JpaRepository<Comment, Long> {
     long countByPostIdAndDeletedAtIsNull(Long postId);
 
     /** 评论首页：按创建时间倒序、id 倒序兜底。 */
-    List<Comment> findByPostIdAndDeletedAtIsNullOrderByCreatedAtDesc(Long postId, Pageable pageable);
+    @Query("""
+            select c from Comment c
+            where c.postId = :postId and c.deletedAt is null
+            order by c.createdAt desc, c.id desc
+            """)
+    List<Comment> findByPostIdAndDeletedAtIsNullOrderByCreatedAtDesc(@Param("postId") Long postId, Pageable pageable);
 
     /** 游标之后的一页（createdAt 排序）。 */
     @Query("""

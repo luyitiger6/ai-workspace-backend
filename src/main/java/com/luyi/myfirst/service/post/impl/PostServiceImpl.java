@@ -2,6 +2,7 @@ package com.luyi.myfirst.service.post.impl;
 
 import com.luyi.myfirst.common.enums.PostSortBy;
 import com.luyi.myfirst.common.enums.PostStatus;
+import com.luyi.myfirst.common.enums.VoteDirection;
 import com.luyi.myfirst.common.exception.AuthErrorEnum;
 import com.luyi.myfirst.common.exception.BizException;
 import com.luyi.myfirst.common.exception.PostErrorEnum;
@@ -21,6 +22,7 @@ import com.luyi.myfirst.service.post.model.PostSummary;
 import com.luyi.myfirst.service.post.model.PostView;
 import com.luyi.myfirst.service.post.support.FeedCursor;
 import com.luyi.myfirst.service.post.support.PostInputRules;
+import com.luyi.myfirst.service.post.support.PostReadAccess;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -58,17 +60,20 @@ public class PostServiceImpl implements PostService {
     private final CommentRepository comments;
     private final VoteRepository votes;
     private final BookmarkRepository bookmarks;
+    private final PostReadAccess readAccess;
 
     public PostServiceImpl(PostRepository posts,
                            AccountRepository accounts,
                            CommentRepository comments,
                            VoteRepository votes,
-                           BookmarkRepository bookmarks) {
+                           BookmarkRepository bookmarks,
+                           PostReadAccess readAccess) {
         this.posts = posts;
         this.accounts = accounts;
         this.comments = comments;
         this.votes = votes;
         this.bookmarks = bookmarks;
+        this.readAccess = readAccess;
     }
 
     @Override
@@ -118,10 +123,7 @@ public class PostServiceImpl implements PostService {
     @Override
     @Transactional(readOnly = true)
     public PostView read(String postPublicId, VerifiedToken viewer) {
-        Post post = requireExisting(postPublicId);
-        if (post.status() == PostStatus.DRAFT && !isAuthor(post, viewer)) {
-            throw notFound();
-        }
+        Post post = readAccess.requireReadable(postPublicId, viewer);
         return toView(post, authorPublicId(post.authorId()));
     }
 
@@ -197,12 +199,16 @@ public class PostServiceImpl implements PostService {
     private Map<Long, InteractionCounts> countsOf(List<Post> page) {
         Map<Long, InteractionCounts> result = new HashMap<>();
         for (Post post : page) {
-            long commentCount = comments.countByPostIdAndDeletedAtIsNull(post.id());
-            long upVoteCount = votes.countByPostIdAndDirectionAndDeletedAtIsNull(post.id(), com.luyi.myfirst.common.enums.VoteDirection.UP);
-            long bookmarkCount = bookmarks.countByPostIdAndDeletedAtIsNull(post.id());
-            result.put(post.id(), new InteractionCounts(commentCount, upVoteCount, bookmarkCount));
+            result.put(post.id(), countsOf(post));
         }
         return result;
+    }
+
+    private InteractionCounts countsOf(Post post) {
+        return new InteractionCounts(
+                comments.countByPostIdAndDeletedAtIsNull(post.id()),
+                votes.countByPostIdAndDirectionAndDeletedAtIsNull(post.id(), VoteDirection.UP),
+                bookmarks.countByPostIdAndDeletedAtIsNull(post.id()));
     }
 
     private Post requireExisting(String postPublicId) {
@@ -245,7 +251,8 @@ public class PostServiceImpl implements PostService {
         return Math.min(limit, MAX_LIMIT);
     }
 
-    private static PostView toView(Post post, String authorPublicId) {
+    private PostView toView(Post post, String authorPublicId) {
+        InteractionCounts counts = countsOf(post);
         return new PostView(
                 post.publicId(),
                 post.title(),
@@ -255,7 +262,10 @@ public class PostServiceImpl implements PostService {
                 post.status(),
                 authorPublicId,
                 post.createdAt(),
-                post.updatedAt());
+                post.updatedAt(),
+                counts.commentCount(),
+                counts.upVoteCount(),
+                counts.bookmarkCount());
     }
 
     private static PostSummary toSummary(Post post, String authorPublicId, InteractionCounts counts) {

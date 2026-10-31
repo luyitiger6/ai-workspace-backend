@@ -6,7 +6,7 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * 帖子详情的服务层视图：九个白名单字段，一个不多。
+ * 帖子详情的服务层视图：正文与三项有效互动统计均在白名单内。
  *
  * 这里已经是「对外形状」，但仍是服务层类型——web 层的 {@code PostResponse} 逐字镜像它，
  * 目的是让「响应字段集合等于白名单」这条断言可以在服务层先钉一遍（design Risks 第 2 条：
@@ -24,5 +24,8 @@ public record PostView(String publicId,
                        PostStatus status,
                        String authorPublicId,
                        Instant createdAt,
-                       Instant updatedAt) {
+                       Instant updatedAt,
+                       long commentCount,
+                       long upVoteCount,
+                       long bookmarkCount) {
 }

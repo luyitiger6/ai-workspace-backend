@@ -20,6 +20,7 @@ import com.luyi.myfirst.service.post.model.PostCommand;
 import com.luyi.myfirst.service.post.model.PostPage;
 import com.luyi.myfirst.service.post.model.PostSummary;
 import com.luyi.myfirst.service.post.model.PostView;
+import jakarta.persistence.EntityManager;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -51,6 +54,9 @@ class PostInteractionServiceTest {
 
     @Autowired
     private AccountRepository accounts;
+
+    @Autowired
+    private EntityManager entityManager;
 
     // ---------- 评论：创建、删除、列表、二级回复 ----------
 
@@ -102,7 +108,7 @@ class PostInteractionServiceTest {
                 new CommentCreateCommand("x".repeat(2001), null))).getErrorCode())
                 .isEqualTo(AuthErrorEnum.VALIDATION_FAILED.getErrorCode());
 
-        assertThat(interactions.listComments(post.publicId(), null, 10).items()).isEmpty();
+        assertThat(interactions.listComments(post.publicId(), null, null, 10).items()).isEmpty();
     }
 
     @Test
@@ -115,7 +121,7 @@ class PostInteractionServiceTest {
 
         interactions.deleteComment(author, post.publicId(), comment.publicId());
 
-        assertThat(interactions.listComments(post.publicId(), null, 10).items())
+        assertThat(interactions.listComments(post.publicId(), null, null, 10).items())
                 .extracting(CommentView::publicId)
                 .doesNotContain(comment.publicId());
         assertThat(feedOne(post.publicId()).commentCount()).isEqualTo(0L);
@@ -134,7 +140,7 @@ class PostInteractionServiceTest {
 
         assertThat(error.getErrorCode()).isEqualTo(PostErrorEnum.POST_FORBIDDEN.getErrorCode());
         assertThat(error.getHttpStatus()).isEqualTo(HttpStatus.FORBIDDEN);
-        assertThat(interactions.listComments(post.publicId(), null, 10).items())
+        assertThat(interactions.listComments(post.publicId(), null, null, 10).items())
                 .extracting(CommentView::publicId)
                 .contains(comment.publicId());
     }
@@ -149,16 +155,43 @@ class PostInteractionServiceTest {
         CommentView second = interactions.createComment(author, post.publicId(),
                 new CommentCreateCommand("第二条", null));
 
-        CommentPage page = interactions.listComments(post.publicId(), null, 1);
+        CommentPage page = interactions.listComments(post.publicId(), null, null, 1);
 
         assertThat(page.items()).hasSize(1);
         assertThat(page.items().get(0).publicId()).isEqualTo(second.publicId());
         assertThat(page.nextCursor()).isNotNull();
 
-        CommentPage next = interactions.listComments(post.publicId(), page.nextCursor(), 1);
+        CommentPage next = interactions.listComments(post.publicId(), null, page.nextCursor(), 1);
         assertThat(next.items()).hasSize(1);
         assertThat(next.items().get(0).publicId()).isEqualTo(first.publicId());
         assertThat(next.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("评论读取共享详情可见性：已发布公开，草稿仅作者，删除与不存在均 404")
+    void commentReadVisibilityMatchesDetail() {
+        VerifiedToken author = newToken("草稿作者");
+        VerifiedToken other = newToken("其它账户");
+        PostView post = posts.publish(author, published("公开评论"));
+        interactions.createComment(author, post.publicId(), new CommentCreateCommand("正文评论", null));
+        for (VerifiedToken viewer : new VerifiedToken[]{null, author, other}) {
+            assertThat(interactions.listComments(post.publicId(), viewer, null, 20).items())
+                    .extracting(CommentView::content).containsExactly("正文评论");
+        }
+        posts.edit(author, post.publicId(), new PostCommand("草稿", "内容", null, List.of(), PostStatus.DRAFT));
+        assertThat(interactions.listComments(post.publicId(), author, null, 20).items()).hasSize(1);
+        for (VerifiedToken viewer : new VerifiedToken[]{null, other}) {
+            assertNotFound(() -> interactions.listComments(post.publicId(), viewer, null, 20));
+            assertNotFound(() -> posts.read(post.publicId(), viewer));
+        }
+        // 本 CHANGE 只修改读取边界：其它账户的既有草稿写行为保持不变。
+        interactions.createComment(other, post.publicId(), new CommentCreateCommand("既有写规则", null));
+        assertThat(interactions.listComments(post.publicId(), author, null, 20).items()).hasSize(2);
+        posts.delete(author, post.publicId());
+        for (VerifiedToken viewer : new VerifiedToken[]{null, author, other}) {
+            assertNotFound(() -> interactions.listComments(post.publicId(), viewer, null, 20));
+            assertNotFound(() -> interactions.listComments(Ulid.generate(), viewer, null, 20));
+        }
     }
 
     // ---------- 投票：创建、替换、删除 ----------
@@ -299,6 +332,129 @@ class PostInteractionServiceTest {
                 .isEqualTo(PostErrorEnum.POST_NOT_FOUND.getErrorCode());
     }
 
+    @Test
+    @DisplayName("本人状态为 null/false 或有效 up/down；账户隔离，取消后不复活旧记录")
+    void ownStateIsEffectiveAndAccountIsolated() {
+        VerifiedToken a = newToken("账户甲");
+        VerifiedToken b = newToken("账户乙");
+        String publicId = posts.publish(a, published("本人状态")).publicId();
+        assertState(a, publicId, null, false);
+        assertState(b, publicId, null, false);
+        interactions.vote(a, publicId, new VoteCreateCommand(VoteDirection.DOWN));
+        interactions.bookmark(a, publicId);
+        assertState(a, publicId, VoteDirection.DOWN, true);
+        assertState(b, publicId, null, false);
+        interactions.vote(b, publicId, new VoteCreateCommand(VoteDirection.UP));
+        assertState(b, publicId, VoteDirection.UP, false);
+        interactions.cancelVote(a, publicId);
+        interactions.cancelBookmark(a, publicId);
+        assertState(a, publicId, null, false);
+        assertState(b, publicId, VoteDirection.UP, false);
+        assertThat(posts.read(publicId, a).upVoteCount()).isEqualTo(1L);
+        interactions.cancelVote(b, publicId);
+        assertState(b, publicId, null, false);
+        assertThat(posts.read(publicId, a).upVoteCount()).isZero();
+        interactions.vote(a, publicId, new VoteCreateCommand(VoteDirection.UP));
+        interactions.bookmark(a, publicId);
+        assertState(a, publicId, VoteDirection.UP, true);
+    }
+
+    @Test
+    @DisplayName("个人状态共享草稿、已删除与不存在的读取边界")
+    void ownStateUsesPostReadVisibility() {
+        VerifiedToken author = newToken("草稿作者");
+        VerifiedToken other = newToken("其它账户");
+        String publicId = posts.publish(author,
+                new PostCommand("草稿", "内容", null, List.of(), PostStatus.DRAFT)).publicId();
+        assertState(author, publicId, null, false);
+        assertNotFound(() -> interactions.readMyInteractions(other, publicId));
+        posts.delete(author, publicId);
+        assertNotFound(() -> interactions.readMyInteractions(author, publicId));
+        assertNotFound(() -> interactions.readMyInteractions(other, Ulid.generate()));
+    }
+
+    @Test
+    @DisplayName("列表返回真实父标识：同页、跨页、父软删除与历史深层回复均不丢失关系")
+    void commentListResolvesRealParentsAcrossPagesAndDeletion() {
+        VerifiedToken author = newToken("评论作者");
+        String publicId = posts.publish(author, published("父关系")).publicId();
+        CommentView parent = interactions.createComment(author, publicId, new CommentCreateCommand("父正文", null));
+        CommentView reply = interactions.createComment(author, publicId, new CommentCreateCommand("回复正文", parent.publicId()));
+        CommentPage samePage = interactions.listComments(publicId, null, null, 20);
+        assertThat(samePage.items()).extracting(CommentView::publicId).containsExactly(reply.publicId(), parent.publicId());
+        assertThat(samePage.items().get(0).parentPublicId()).isEqualTo(parent.publicId());
+        CommentPage firstPage = interactions.listComments(publicId, null, null, 1);
+        assertThat(firstPage.items().get(0).parentPublicId()).isEqualTo(parent.publicId());
+        assertThat(interactions.listComments(publicId, null, firstPage.nextCursor(), 1).items().get(0).parentPublicId()).isNull();
+        CommentView deeper = interactions.createComment(author, publicId, new CommentCreateCommand("历史深层", reply.publicId()));
+        interactions.deleteComment(author, publicId, parent.publicId());
+        CommentPage remaining = interactions.listComments(publicId, null, null, 20);
+        assertThat(remaining.items()).extracting(CommentView::publicId).containsExactly(deeper.publicId(), reply.publicId());
+        assertThat(remaining.items()).extracting(CommentView::content).doesNotContain("父正文");
+        assertThat(remaining.items().get(0).parentPublicId()).isEqualTo(reply.publicId());
+        assertThat(remaining.items().get(1).parentPublicId()).isEqualTo(parent.publicId());
+        assertThat(posts.read(publicId, null).commentCount()).isEqualTo(2L);
+    }
+
+    @Test
+    @DisplayName("不存在、跨帖和已删除父评论目标均 404，不建立回复")
+    void invalidReplyTargetsDoNotCreateComments() {
+        VerifiedToken author = newToken("评论作者");
+        String publicId = posts.publish(author, published("当前帖子")).publicId();
+        String otherPost = posts.publish(author, published("其它帖子")).publicId();
+        CommentView crossPost = interactions.createComment(author, otherPost, new CommentCreateCommand("其它正文", null));
+        CommentView deleted = interactions.createComment(author, publicId, new CommentCreateCommand("已删父", null));
+        interactions.deleteComment(author, publicId, deleted.publicId());
+        for (String parent : List.of(Ulid.generate(), crossPost.publicId(), deleted.publicId())) {
+            assertNotFound(() -> interactions.createComment(author, publicId, new CommentCreateCommand("不应落库", parent)));
+        }
+        assertThat(interactions.listComments(publicId, null, null, 20).items()).isEmpty();
+        assertThat(posts.read(publicId, null).commentCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("评论默认 20、上限 50、非法游标 400；相同创建时间按 id 稳定续页到底")
+    void commentPagingLimitsAndStableContinuation() {
+        VerifiedToken author = newToken("分页作者");
+        String publicId = posts.publish(author, published("评论分页")).publicId();
+        List<String> ids = new ArrayList<>();
+        for (int index = 0; index < 55; index++) {
+            ids.add(interactions.createComment(author, publicId, new CommentCreateCommand("评论" + index, null)).publicId());
+        }
+        entityManager.flush();
+        entityManager.createNativeQuery("update post_comments set created_at = '2026-01-01 00:00:00.000' "
+                        + "where post_id = (select id from posts where public_id = :post)")
+                .setParameter("post", publicId).executeUpdate();
+        entityManager.clear();
+        Collections.reverse(ids);
+        CommentPage first = interactions.listComments(publicId, null, null, null);
+        assertThat(first.items()).extracting(CommentView::publicId).containsExactlyElementsOf(ids.subList(0, 20));
+        CommentPage second = interactions.listComments(publicId, null, first.nextCursor(), null);
+        assertThat(second.items()).extracting(CommentView::publicId).containsExactlyElementsOf(ids.subList(20, 40));
+        CommentPage last = interactions.listComments(publicId, null, second.nextCursor(), null);
+        assertThat(last.items()).extracting(CommentView::publicId).containsExactlyElementsOf(ids.subList(40, 55));
+        assertThat(last.nextCursor()).isNull();
+        assertThat(interactions.listComments(publicId, null, null, 500).items()).hasSize(50);
+        assertThat(rejectionOf(() -> interactions.listComments(publicId, null, "broken-cursor", 20)).getErrorCode())
+                .isEqualTo(AuthErrorEnum.VALIDATION_FAILED.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("Java trim 与 UTF-16 边界：2000 代码单元可写，2001、null 和控制空白被拒")
+    void commentContentUsesJavaTrimAndUtf16Length() {
+        VerifiedToken author = newToken("边界作者");
+        String publicId = posts.publish(author, published("内容边界")).publicId();
+        String emoji = "😀".repeat(1000);
+        assertThat(interactions.createComment(author, publicId, new CommentCreateCommand("\u0000\u001f " + emoji + " \u0001", null)).content())
+                .isEqualTo(emoji).hasSize(2000);
+        assertThat(interactions.createComment(author, publicId, new CommentCreateCommand("\u00a0", null)).content()).isEqualTo("\u00a0");
+        for (String invalid : new String[]{null, "\u0000\u001f ", emoji + "x", "x".repeat(2001)}) {
+            assertThat(rejectionOf(() -> interactions.createComment(author, publicId, new CommentCreateCommand(invalid, null))).getErrorCode())
+                    .isEqualTo(AuthErrorEnum.VALIDATION_FAILED.getErrorCode());
+        }
+        assertThat(posts.read(publicId, author).commentCount()).isEqualTo(2L);
+    }
+
     // ---------- 夹具 ----------
 
     private VerifiedToken newToken(String displayName) {
@@ -322,6 +478,18 @@ class PostInteractionServiceTest {
                 .filter(item -> item.publicId().equals(publicId))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private void assertState(VerifiedToken viewer, String publicId, VoteDirection direction, boolean bookmarked) {
+        var state = interactions.readMyInteractions(viewer, publicId);
+        assertThat(state.voteDirection()).isEqualTo(direction);
+        assertThat(state.bookmarked()).isEqualTo(bookmarked);
+    }
+
+    private static void assertNotFound(ThrowingCallable call) {
+        BizException error = rejectionOf(call);
+        assertThat(error.getErrorCode()).isEqualTo(PostErrorEnum.POST_NOT_FOUND.getErrorCode());
+        assertThat(error.getHttpStatus()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     private static BizException rejectionOf(ThrowingCallable call) {

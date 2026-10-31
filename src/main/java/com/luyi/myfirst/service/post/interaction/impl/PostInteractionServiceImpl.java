@@ -22,10 +22,12 @@ import com.luyi.myfirst.service.post.interaction.model.BookmarkView;
 import com.luyi.myfirst.service.post.interaction.model.CommentCreateCommand;
 import com.luyi.myfirst.service.post.interaction.model.CommentPage;
 import com.luyi.myfirst.service.post.interaction.model.CommentView;
+import com.luyi.myfirst.service.post.interaction.model.PostInteractionState;
 import com.luyi.myfirst.service.post.interaction.model.VoteCreateCommand;
 import com.luyi.myfirst.service.post.interaction.model.VoteResult;
 import com.luyi.myfirst.service.post.interaction.model.VoteView;
 import com.luyi.myfirst.service.post.interaction.support.CommentCursor;
+import com.luyi.myfirst.service.post.support.PostReadAccess;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -57,17 +59,20 @@ public class PostInteractionServiceImpl implements PostInteractionService {
     private final CommentRepository comments;
     private final VoteRepository votes;
     private final BookmarkRepository bookmarks;
+    private final PostReadAccess readAccess;
 
     public PostInteractionServiceImpl(PostRepository posts,
                                       AccountRepository accounts,
                                       CommentRepository comments,
                                       VoteRepository votes,
-                                      BookmarkRepository bookmarks) {
+                                      BookmarkRepository bookmarks,
+                                      PostReadAccess readAccess) {
         this.posts = posts;
         this.accounts = accounts;
         this.comments = comments;
         this.votes = votes;
         this.bookmarks = bookmarks;
+        this.readAccess = readAccess;
     }
 
     @Override
@@ -95,8 +100,8 @@ public class PostInteractionServiceImpl implements PostInteractionService {
 
     @Override
     @Transactional(readOnly = true)
-    public CommentPage listComments(String postPublicId, String cursor, Integer limit) {
-        Post post = requireExistingPost(postPublicId);
+    public CommentPage listComments(String postPublicId, VerifiedToken viewer, String cursor, Integer limit) {
+        Post post = readAccess.requireReadable(postPublicId, viewer);
         int size = normalizeCommentLimit(limit);
         CommentCursor after = CommentCursor.decode(cursor);
         Pageable pageable = PageRequest.of(0, size + 1);
@@ -107,9 +112,14 @@ public class PostInteractionServiceImpl implements PostInteractionService {
         boolean hasMore = rows.size() > size;
         List<Comment> page = hasMore ? rows.subList(0, size) : rows;
         Map<Long, String> authorPublicIds = authorPublicIdsOf(page.stream().map(Comment::authorId).collect(Collectors.toSet()));
-        Map<Long, String> parentPublicIds = page.stream()
-                .filter(c -> c.parentId() != null)
-                .collect(Collectors.toMap(Comment::parentId, Comment::publicId, (a, b) -> a));
+        Set<Long> parentIds = page.stream().map(Comment::parentId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, String> parentPublicIds = new HashMap<>();
+        if (!parentIds.isEmpty()) {
+            // 包括软删除父记录；只映射标识，不把父正文加入响应。
+            comments.findAllById(parentIds)
+                    .forEach(parent -> parentPublicIds.put(parent.id(), parent.publicId()));
+        }
 
         List<CommentView> items = page.stream()
                 .map(c -> toCommentView(c, post.publicId(),
@@ -123,6 +133,17 @@ public class PostInteractionServiceImpl implements PostInteractionService {
             nextCursor = new CommentCursor(last.createdAt(), last.id()).encode();
         }
         return new CommentPage(items, nextCursor);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PostInteractionState readMyInteractions(VerifiedToken viewer, String postPublicId) {
+        Post post = readAccess.requireReadable(postPublicId, viewer);
+        Long accountId = viewer.account().id();
+        VoteDirection direction = votes.findByPostIdAndAuthorIdAndDeletedAtIsNull(post.id(), accountId)
+                .map(Vote::direction).orElse(null);
+        boolean bookmarked = bookmarks.findByPostIdAndAuthorIdAndDeletedAtIsNull(post.id(), accountId).isPresent();
+        return new PostInteractionState(direction, bookmarked);
     }
 
     @Override

@@ -5,6 +5,7 @@ import com.luyi.myfirst.service.post.interaction.model.BookmarkResult;
 import com.luyi.myfirst.service.post.interaction.model.CommentCreateCommand;
 import com.luyi.myfirst.service.post.interaction.model.CommentPage;
 import com.luyi.myfirst.service.post.interaction.model.CommentView;
+import com.luyi.myfirst.service.post.interaction.model.PostInteractionState;
 import com.luyi.myfirst.service.post.interaction.model.VoteCreateCommand;
 import com.luyi.myfirst.service.post.interaction.model.VoteResult;
 
@@ -26,7 +27,10 @@ public interface PostInteractionService {
      *
      * {@code cursor} 为 null / 空白时返回第一页；列表按创建时间倒序。
      */
-    CommentPage listComments(String postPublicId, String cursor, Integer limit);
+    CommentPage listComments(String postPublicId, VerifiedToken viewer, String cursor, Integer limit);
+
+    /** 读取令牌账户的有效投票和收藏；未互动不是未找到。 */
+    PostInteractionState readMyInteractions(VerifiedToken viewer, String postPublicId);
 
     /** 投票；同一账户同一帖子只保留一条有效记录，再次投票替换方向。 */
     VoteResult vote(VerifiedToken author, String postPublicId, VoteCreateCommand command);

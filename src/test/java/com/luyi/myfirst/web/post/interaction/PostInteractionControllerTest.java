@@ -1,5 +1,6 @@
 package com.luyi.myfirst.web.post.interaction;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.luyi.myfirst.common.web.ApiResponse;
 import com.luyi.myfirst.dao.auth.entity.Account;
@@ -28,6 +29,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -37,6 +41,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -231,6 +237,35 @@ class PostInteractionControllerTest {
                 .andExpect(jsonPath("$.nextCursor").value(org.hamcrest.Matchers.nullValue()));
     }
 
+    @Test
+    @DisplayName("详情和评论 GET 可见性一致：草稿作者可读，他人、游客、无效 cookie 为 404")
+    void attachedReadsShareDraftVisibility() throws Exception {
+        Cookie author = authCookie("草稿作者");
+        Cookie other = authCookie("其他账户");
+        Cookie invalid = new Cookie(AuthCookie.NAME, "invalid-token");
+        String publicId = createPostReturningId(author, "可见性");
+        createCommentReturningId(publicId, author, "附属内容");
+        for (Cookie viewer : new Cookie[]{null, author, other, invalid}) {
+            assertPublicReadsStatus(publicId, viewer, 200);
+        }
+        mockMvc.perform(put("/api/posts/{publicId}", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(new PostCreateRequest("草稿", "内容", null, List.of(), "draft"))))
+                .andExpect(status().isOk());
+        assertPublicReadsStatus(publicId, author, 200);
+        for (Cookie viewer : new Cookie[]{null, other, invalid}) {
+            assertPublicReadsStatus(publicId, viewer, 404);
+        }
+        mockMvc.perform(delete("/api/posts/{publicId}", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author))
+                .andExpect(status().isNoContent());
+        for (Cookie viewer : new Cookie[]{null, author, other}) {
+            assertPublicReadsStatus(publicId, viewer, 404);
+            assertPublicReadsStatus(com.luyi.myfirst.common.id.Ulid.generate(), viewer, 404);
+        }
+    }
+
     // ---------- 投票端点 ----------
 
     @Test
@@ -396,7 +431,220 @@ class PostInteractionControllerTest {
                 .andExpect(jsonPath("$.code").value("UNAUTHENTICATED"));
     }
 
+    @Test
+    @DisplayName("个人状态 HTTP 为准确两字段且 no-store，客户端账户参数不改变 cookie 归属")
+    void personalStateJsonIsPrivateAndAccountBound() throws Exception {
+        Cookie a = authCookie("账户甲");
+        Cookie b = authCookie("账户乙");
+        String publicId = createPostReturningId(a, "私人状态");
+        assertPersonalState(publicId, a, null, false);
+        assertPersonalState(publicId, b, null, false);
+        vote(publicId, a, "down");
+        bookmark(publicId, a);
+        vote(publicId, b, "up");
+        assertPersonalState(publicId, a, "down", true);
+        assertPersonalState(publicId, b, "up", false);
+        mockMvc.perform(delete("/api/posts/{publicId}/votes", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(a)).andExpect(status().isNoContent());
+        mockMvc.perform(delete("/api/posts/{publicId}/bookmarks", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(a)).andExpect(status().isNoContent());
+        assertPersonalState(publicId, a, null, false);
+        assertPersonalState(publicId, b, "up", false);
+        mockMvc.perform(get("/api/posts/{publicId}", publicId))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.upVoteCount").value(1));
+        mockMvc.perform(delete("/api/posts/{publicId}/votes", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(b)).andExpect(status().isNoContent());
+        assertPersonalState(publicId, b, null, false);
+        mockMvc.perform(get("/api/posts/{publicId}", publicId))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.upVoteCount").value(0));
+    }
+
+    @Test
+    @DisplayName("个人状态未登记为公开：无效或无 cookie 对公开、草稿、删除及不存在均先返回 401")
+    void personalStateAuthenticatesBeforeVisibility() throws Exception {
+        Cookie author = authCookie("认证作者");
+        Cookie other = authCookie("认证其它账户");
+        String published = createPostReturningId(author, "公开状态");
+        String draft = createPostReturningId(author, "草稿状态");
+        String deleted = createPostReturningId(author, "删除状态");
+        mockMvc.perform(put("/api/posts/{publicId}", draft).header(HttpHeaders.ORIGIN, ORIGIN).cookie(author)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(new PostCreateRequest("草稿", "内容", null, List.of(), "draft"))))
+                .andExpect(status().isOk());
+        mockMvc.perform(delete("/api/posts/{publicId}", deleted).header(HttpHeaders.ORIGIN, ORIGIN).cookie(author))
+                .andExpect(status().isNoContent());
+        for (String publicId : List.of(published, draft, deleted, com.luyi.myfirst.common.id.Ulid.generate())) {
+            mockMvc.perform(get("/api/posts/{publicId}/interactions/me", publicId)
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer ignored"))
+                    .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHENTICATED"));
+            mockMvc.perform(get("/api/posts/{publicId}/interactions/me", publicId)
+                            .cookie(new Cookie(AuthCookie.NAME, "invalid")))
+                    .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHENTICATED"));
+        }
+        assertPersonalState(draft, author, null, false);
+        for (String publicId : List.of(draft, deleted, com.luyi.myfirst.common.id.Ulid.generate())) {
+            mockMvc.perform(get("/api/posts/{publicId}/interactions/me", publicId).cookie(other))
+                    .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("POST_NOT_FOUND"));
+        }
+        mockMvc.perform(get("/api/posts/{publicId}/interactions/me", deleted).cookie(author))
+                .andExpect(status().isNotFound());
+        assertThat(com.luyi.myfirst.web.auth.interceptor.AuthInterceptor.isPublicRoute(
+                "GET", "/api/posts/" + published + "/interactions/me")).isFalse();
+        assertThat(com.luyi.myfirst.web.auth.interceptor.AuthInterceptor.isPublicRoute(
+                "GET", "/api/posts/" + published + "/interactions/unregistered")).isFalse();
+    }
+
+    @Test
+    @DisplayName("回复列表的父标识在同页、跨页、根删除与历史深层关系中保持正确")
+    void replyListJsonResolvesParents() throws Exception {
+        Cookie author = authCookie("回复作者");
+        String publicId = createPostReturningId(author, "回复列表");
+        String parent = createCommentReturningId(publicId, author, "父正文");
+        String reply = createReplyReturningId(publicId, author, "回复正文", parent);
+        mockMvc.perform(get("/api/posts/{publicId}/comments", publicId))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].publicId").value(reply))
+                .andExpect(jsonPath("$.items[0].parentPublicId").value(parent))
+                .andExpect(jsonPath("$.items[1].parentPublicId").value(org.hamcrest.Matchers.nullValue()));
+        JsonNode first = readCommentPage(publicId, null, 1);
+        assertThat(first.get("items").get(0).get("parentPublicId").asText()).isEqualTo(parent);
+        JsonNode second = readCommentPage(publicId, first.get("nextCursor").asText(), 1);
+        assertThat(second.get("items").get(0).get("publicId").asText()).isEqualTo(parent);
+        String deeper = createReplyReturningId(publicId, author, "历史深层", reply);
+        mockMvc.perform(delete("/api/posts/{publicId}/comments/{commentId}", publicId, parent)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author)).andExpect(status().isNoContent());
+        mockMvc.perform(get("/api/posts/{publicId}/comments", publicId))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.items[0].publicId").value(deeper))
+                .andExpect(jsonPath("$.items[0].parentPublicId").value(reply))
+                .andExpect(jsonPath("$.items[1].publicId").value(reply))
+                .andExpect(jsonPath("$.items[1].parentPublicId").value(parent))
+                .andExpect(jsonPath("$.items[*].content", org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem("父正文"))));
+        String otherPost = createPostReturningId(author, "其它帖");
+        String crossPost = createCommentReturningId(otherPost, author, "跨帖父");
+        for (String target : List.of(parent, crossPost, com.luyi.myfirst.common.id.Ulid.generate())) {
+            mockMvc.perform(post("/api/posts/{publicId}/comments", publicId)
+                            .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author).contentType(MediaType.APPLICATION_JSON)
+                            .content(json(new CommentCreateRequest("不应创建", target))))
+                    .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("POST_NOT_FOUND"));
+        }
+        assertThat(readCommentPage(publicId, null, 20).get("items").size()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("评论 HTTP 默认 20、上限 50、非法游标 400，续页保持倒序至 nextCursor=null")
+    void commentPaginationJsonContract() throws Exception {
+        Cookie author = authCookie("分页作者");
+        String publicId = createPostReturningId(author, "分页契约");
+        List<String> ids = new ArrayList<>();
+        for (int index = 0; index < 55; index++) {
+            ids.add(createCommentReturningId(publicId, author, "评论" + index));
+        }
+        Collections.reverse(ids);
+        JsonNode first = readCommentPage(publicId, null, null);
+        assertThat(commentIds(first)).containsExactlyElementsOf(ids.subList(0, 20));
+        JsonNode second = readCommentPage(publicId, first.get("nextCursor").asText(), null);
+        assertThat(commentIds(second)).containsExactlyElementsOf(ids.subList(20, 40));
+        JsonNode last = readCommentPage(publicId, second.get("nextCursor").asText(), null);
+        assertThat(commentIds(last)).containsExactlyElementsOf(ids.subList(40, 55));
+        assertThat(last.get("nextCursor").isNull()).isTrue();
+        assertThat(readCommentPage(publicId, null, 500).get("items").size()).isEqualTo(50);
+        mockMvc.perform(get("/api/posts/{publicId}/comments", publicId).param("cursor", "broken"))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    }
+
+    @Test
+    @DisplayName("评论 HTTP 保持 Java trim 与 UTF-16 边界，拒绝不落库")
+    void commentUtf16JsonContract() throws Exception {
+        Cookie author = authCookie("内容作者");
+        String publicId = createPostReturningId(author, "UTF-16");
+        String emoji = "😀".repeat(1000);
+        mockMvc.perform(post("/api/posts/{publicId}/comments", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author).contentType(MediaType.APPLICATION_JSON)
+                        .content(json(new CommentCreateRequest("\u001f " + emoji + " \u0001", null))))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.content").value(emoji));
+        for (String invalid : new String[]{null, "\u001f ", emoji + "x"}) {
+            mockMvc.perform(post("/api/posts/{publicId}/comments", publicId)
+                            .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author).contentType(MediaType.APPLICATION_JSON)
+                            .content(json(new CommentCreateRequest(invalid, null))))
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+        }
+        assertThat(readCommentPage(publicId, null, 20).get("items").size()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("所有互动 DELETE 都先来源后认证，取消本人记录不存在时仍区分 403 与 404")
+    void deleteGuardsAndCancelErrorsRemainUnchanged() throws Exception {
+        Cookie author = authCookie("取消作者");
+        Cookie other = authCookie("取消其它账户");
+        String publicId = createPostReturningId(author, "取消边界");
+        for (String suffix : List.of("/comments/missing", "/votes", "/bookmarks")) {
+            mockMvc.perform(delete("/api/posts/" + publicId + suffix))
+                    .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("CROSS_SITE_REJECTED"));
+            mockMvc.perform(delete("/api/posts/" + publicId + suffix).header(HttpHeaders.ORIGIN, ORIGIN))
+                    .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHENTICATED"));
+        }
+        vote(publicId, author, "up");
+        bookmark(publicId, author);
+        for (String suffix : List.of("/votes", "/bookmarks")) {
+            mockMvc.perform(delete("/api/posts/" + publicId + suffix).header(HttpHeaders.ORIGIN, ORIGIN).cookie(other))
+                    .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("POST_FORBIDDEN"));
+            mockMvc.perform(delete("/api/posts/" + publicId + suffix).header(HttpHeaders.ORIGIN, ORIGIN).cookie(author))
+                    .andExpect(status().isNoContent());
+            mockMvc.perform(delete("/api/posts/" + publicId + suffix).header(HttpHeaders.ORIGIN, ORIGIN).cookie(author))
+                    .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("POST_NOT_FOUND"));
+        }
+    }
+
     // ---------- 夹具 ----------
+
+    private void assertPersonalState(String publicId, Cookie viewer, String direction, boolean bookmarked) throws Exception {
+        String json = mockMvc.perform(get("/api/posts/{publicId}/interactions/me", publicId).cookie(viewer)
+                        .param("accountPublicId", "forged").param("accountId", "0"))
+                .andExpect(status().isOk()).andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
+                .andReturn().getResponse().getContentAsString();
+        JsonNode state = objectMapper.readTree(json);
+        Set<String> fields = new HashSet<>();
+        state.fieldNames().forEachRemaining(fields::add);
+        assertThat(fields).containsExactlyInAnyOrder("voteDirection", "bookmarked");
+        assertThat(state.get("voteDirection").isNull() ? null : state.get("voteDirection").asText()).isEqualTo(direction);
+        assertThat(state.get("bookmarked").isBoolean()).isTrue();
+        assertThat(state.get("bookmarked").asBoolean()).isEqualTo(bookmarked);
+    }
+
+    private JsonNode readCommentPage(String publicId, String cursor, Integer limit) throws Exception {
+        var request = get("/api/posts/{publicId}/comments", publicId);
+        if (cursor != null) { request.param("cursor", cursor); }
+        if (limit != null) { request.param("limit", limit.toString()); }
+        return objectMapper.readTree(mockMvc.perform(request).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+    }
+
+    private List<String> commentIds(JsonNode page) {
+        List<String> ids = new ArrayList<>();
+        page.get("items").forEach(item -> ids.add(item.get("publicId").asText()));
+        return ids;
+    }
+
+    private String createReplyReturningId(String publicId, Cookie author, String content, String parent) throws Exception {
+        String json = mockMvc.perform(post("/api/posts/{publicId}/comments", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author).contentType(MediaType.APPLICATION_JSON)
+                        .content(json(new CommentCreateRequest(content, parent))))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(json).get("publicId").asText();
+    }
+
+    private void assertPublicReadsStatus(String publicId, Cookie viewer, int expected) throws Exception {
+        for (String suffix : List.of("", "/comments")) {
+            var request = get("/api/posts/" + publicId + suffix);
+            if (viewer != null) {
+                request.cookie(viewer);
+            }
+            var result = mockMvc.perform(request).andExpect(status().is(expected));
+            if (expected == 404) {
+                result.andExpect(jsonPath("$.code").value("POST_NOT_FOUND"));
+            }
+        }
+    }
 
     private String createPostReturningId(Cookie cookie, String title) throws Exception {
         String response = mockMvc.perform(post("/api/posts")

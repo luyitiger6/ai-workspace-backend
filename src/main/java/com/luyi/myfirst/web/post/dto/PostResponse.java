@@ -6,7 +6,7 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * 帖子详情的响应体：九个字段就是白名单本身（spec「响应字段为白名单且不含实体」）。
+ * 帖子详情的响应体：正文与三项统计遵循 spec「响应字段为白名单且不含实体」。
  *
  * {@code status} 用字符串而不是枚举：契约里写的是 {@code draft} / {@code published}，
  * 与库内 CHECK 取值一致；交给 Jackson 直接序列化枚举会得到 {@code PUBLISHED}。
@@ -23,5 +23,8 @@ public record PostResponse(
         String status,
         String authorPublicId,
         Instant createdAt,
-        Instant updatedAt) implements ApiResponse {
+        Instant updatedAt,
+        long commentCount,
+        long upVoteCount,
+        long bookmarkCount) implements ApiResponse {
 }

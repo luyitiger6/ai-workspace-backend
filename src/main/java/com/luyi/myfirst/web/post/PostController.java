@@ -131,7 +131,10 @@ public class PostController {
                 view.status().dbValue(),
                 view.authorPublicId(),
                 view.createdAt(),
-                view.updatedAt());
+                view.updatedAt(),
+                view.commentCount(),
+                view.upVoteCount(),
+                view.bookmarkCount());
     }
 
     private static PostSummaryResponse toSummary(PostSummary summary) {

@@ -1,5 +1,6 @@
 package com.luyi.myfirst.web.post;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.luyi.myfirst.common.enums.PostStatus;
 import com.luyi.myfirst.common.id.Ulid;
@@ -26,10 +27,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -93,7 +93,10 @@ class PostControllerTest {
                 .andExpect(jsonPath("$.status").value("published"))
                 .andExpect(jsonPath("$.authorPublicId").isString())
                 .andExpect(jsonPath("$.createdAt").exists())
-                .andExpect(jsonPath("$.updatedAt").exists());
+                .andExpect(jsonPath("$.updatedAt").exists())
+                .andExpect(jsonPath("$.commentCount").value(0))
+                .andExpect(jsonPath("$.upVoteCount").value(0))
+                .andExpect(jsonPath("$.bookmarkCount").value(0));
     }
 
     @Test
@@ -156,16 +159,40 @@ class PostControllerTest {
 
     @Test
     @DisplayName("响应字段集合等于白名单，且不含内部字段")
-    void responseFieldsMatchWhitelist() {
+    void responseFieldsMatchWhitelist() throws Exception {
         Set<String> detailWhitelist = Set.of(
                 "publicId", "title", "content", "coverImage", "tags",
-                "status", "authorPublicId", "createdAt", "updatedAt");
+                "status", "authorPublicId", "createdAt", "updatedAt",
+                "commentCount", "upVoteCount", "bookmarkCount");
         Set<String> summaryWhitelist = Set.of(
                 "publicId", "title", "coverImage", "tags", "status", "authorPublicId",
                 "createdAt", "updatedAt", "commentCount", "upVoteCount", "bookmarkCount");
-        Set<String> detail = recordComponentNames(PostResponse.class);
-        Set<String> summary = recordComponentNames(PostSummaryResponse.class);
+        Cookie cookie = authCookie("白名单作者");
+        JsonNode created = objectMapper.readTree(mockMvc.perform(post("/api/posts")
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(cookie)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(new PostCreateRequest("白名单", "正文", null, List.of(), "published"))))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
+        String publicId = created.get("publicId").asText();
+        JsonNode edited = objectMapper.readTree(mockMvc.perform(put("/api/posts/{publicId}", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(cookie)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(new PostCreateRequest("编辑白名单", "正文", null, List.of(), "published"))))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        JsonNode read = objectMapper.readTree(mockMvc.perform(get("/api/posts/{publicId}", publicId))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        JsonNode feed = objectMapper.readTree(mockMvc.perform(get("/api/posts"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        Set<String> detail = fieldNames(read);
+        Set<String> summary = fieldNames(feed.get("items").get(0));
 
+        assertThat(fieldNames(created)).containsExactlyInAnyOrderElementsOf(detailWhitelist);
+        assertThat(fieldNames(edited)).containsExactlyInAnyOrderElementsOf(detailWhitelist);
+        for (JsonNode response : List.of(created, edited, read)) {
+            assertThat(response.get("commentCount").asLong()).isZero();
+            assertThat(response.get("upVoteCount").asLong()).isZero();
+            assertThat(response.get("bookmarkCount").asLong()).isZero();
+        }
         assertThat(detail).containsExactlyInAnyOrderElementsOf(detailWhitelist);
         assertThat(summary).containsExactlyInAnyOrderElementsOf(summaryWhitelist);
         assertThat(summary).doesNotContain("content");
@@ -173,6 +200,51 @@ class PostControllerTest {
                 "id", "deletedAt", "version", "createdBy", "updatedBy", "publishedAt");
         assertThat(summary).doesNotContain(
                 "id", "deletedAt", "version", "createdBy", "updatedBy", "publishedAt");
+    }
+
+    @Test
+    @DisplayName("详情 HTTP 返回有效互动统计，反对及软删除不计入赞成数")
+    void detailJsonCarriesEffectiveCounts() throws Exception {
+        Cookie author = authCookie("统计作者");
+        Cookie other = authCookie("统计参与者");
+        String publicId = createPostReturningId(author, "详情统计");
+        String commentJson = mockMvc.perform(post("/api/posts/{publicId}/comments", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"content\":\"评论\"}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        mockMvc.perform(post("/api/posts/{publicId}/votes", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"direction\":\"up\"}"))
+                .andExpect(status().isCreated());
+        mockMvc.perform(post("/api/posts/{publicId}/votes", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(other)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"direction\":\"down\"}"))
+                .andExpect(status().isCreated());
+        mockMvc.perform(post("/api/posts/{publicId}/bookmarks", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author))
+                .andExpect(status().isCreated());
+        mockMvc.perform(get("/api/posts/{publicId}", publicId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.commentCount").value(1))
+                .andExpect(jsonPath("$.upVoteCount").value(1))
+                .andExpect(jsonPath("$.bookmarkCount").value(1))
+                .andExpect(jsonPath("$.voteDirection").doesNotExist())
+                .andExpect(jsonPath("$.bookmarked").doesNotExist());
+        mockMvc.perform(delete("/api/posts/{publicId}/comments/{commentId}", publicId,
+                        objectMapper.readTree(commentJson).get("publicId").asText())
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(delete("/api/posts/{publicId}/votes", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(delete("/api/posts/{publicId}/bookmarks", publicId)
+                        .header(HttpHeaders.ORIGIN, ORIGIN).cookie(author))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(get("/api/posts/{publicId}", publicId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.commentCount").value(0))
+                .andExpect(jsonPath("$.upVoteCount").value(0))
+                .andExpect(jsonPath("$.bookmarkCount").value(0));
     }
 
     // ---------- 5.3 来源校验先于认证 ----------
@@ -279,9 +351,9 @@ class PostControllerTest {
         return objectMapper.writeValueAsString(value);
     }
 
-    private static Set<String> recordComponentNames(Class<?> recordClass) {
-        return Stream.of(recordClass.getRecordComponents())
-                .map(java.lang.reflect.RecordComponent::getName)
-                .collect(Collectors.toSet());
+    private static Set<String> fieldNames(JsonNode response) {
+        Set<String> names = new HashSet<>();
+        response.fieldNames().forEachRemaining(names::add);
+        return names;
     }
 }

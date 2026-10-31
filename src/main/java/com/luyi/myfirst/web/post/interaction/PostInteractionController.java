@@ -74,9 +74,10 @@ public class PostInteractionController {
     @GetMapping("/comments")
     ResponseEntity<CommentListResponse> listComments(
             @PathVariable String postPublicId,
+            @RequestAttribute(name = VERIFIED, required = false) VerifiedToken viewer,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) Integer limit) {
-        CommentPage page = interactionService.listComments(postPublicId, cursor, limit);
+        CommentPage page = interactionService.listComments(postPublicId, viewer, cursor, limit);
         return ResponseEntity.ok(new CommentListResponse(
                 page.items().stream().map(PostInteractionController::toCommentResponse).toList(),
                 page.nextCursor()));
