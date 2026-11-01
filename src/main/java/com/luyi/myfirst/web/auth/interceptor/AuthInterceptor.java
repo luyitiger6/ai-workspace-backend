@@ -83,6 +83,9 @@ public class AuthInterceptor implements HandlerInterceptor {
         routes.put("/api/posts", Set.of("GET"));
         routes.put("/api/posts/*", Set.of("GET"));
         routes.put("/api/posts/*/comments", Set.of("GET"));
+        // 景点域只有两个公开读端点：列表/榜单与详情，没有写端点（design D1）。
+        routes.put("/api/attractions", Set.of("GET"));
+        routes.put("/api/attractions/*", Set.of("GET"));
         return Map.copyOf(routes);
     }
 
