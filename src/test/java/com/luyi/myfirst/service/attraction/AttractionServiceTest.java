@@ -11,14 +11,20 @@ import com.luyi.myfirst.service.attraction.model.AttractionPage;
 import com.luyi.myfirst.service.attraction.model.AttractionSummary;
 import com.luyi.myfirst.service.attraction.model.AttractionView;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -31,13 +37,17 @@ import static org.assertj.core.api.Assertions.catchThrowable;
  * 景点读能力的服务层契约（spec「只呈现已发布景点」「列表的城市过滤、排序与条数上限」
  * 「约束型榜单为人工策展集合」「核实时间可见」）。
  *
- * 两条夹具纪律：
+ * 三条夹具纪律：
  *
  * 1. **不断言绝对总数**：库里恒有 `schema.sql` 的 12 条已发布种子（design Risks 第 1 条），
  *    任何「总数等于 N」的断言都会随种子变动碎掉。这里只断言「返回条目满足给定条件」
  *    与「相对大小」。
  * 2. **夹具用互不相同的固定 `public_id`**：并列排序的断言需要确定的字典序，
  *    随机 ULID 会让「谁在前」变成碰运气。
+ * 3. **每个用例前后清空景点读缓存**：`@Transactional` 只回滚数据库、不回滚 Redis。
+ *    本类在事务内造夹具并调 `service.list()` 时，服务层会把「含夹具的结果」写进缓存；
+ *    事务回滚后缓存仍然在，后续用例就会读到别人的夹具（表现为「期望 H2 实际 H1」
+ *    「期望 50 条实际 13 条」这类串数据）。
  *
  * 草稿、已删除、未核实三条不可见性都放在同一个用例里造：它们共享一个「本可排在最前」
  * 的浏览数，任何一条泄漏都会直接顶掉首条。
@@ -45,6 +55,13 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 @SpringBootTest
 @Transactional
 class AttractionServiceTest {
+
+    /**
+     * 景点缓存键的域前缀。`RankingCache` 刻意不提供清除方法（景点没有写入口，生产用不上），
+     * 所以测试侧只能自己按前缀扫。这是域级粗前缀而非精确业务键：它不参与任何断言，
+     * 清多了也不会让用例变绿，因此「用生产键构造器取键」的约定在这里无构造器可借。
+     */
+    private static final String CACHE_PREFIX = "wc:attraction:";
 
     private static final Instant PUBLISHED_AT = Instant.parse("2026-08-01T00:00:00Z");
     private static final Instant VERIFIED_AT = Instant.parse("2026-08-02T00:00:00Z");
@@ -60,6 +77,27 @@ class AttractionServiceTest {
 
     @Autowired
     private AttractionRepository attractions;
+
+    @Autowired
+    private StringRedisTemplate redis;
+
+    /**
+     * 前后各清一遍：前置清掉上一轮（含中断退出的轮次）留下的夹具快照，后置不把本类的
+     * 夹具遗留给其他测试类与真实前端。用 SCAN 而不是 KEYS：Redis 是共用实例，
+     * 一条 KEYS 会阻塞其他项目的请求。
+     */
+    @BeforeEach
+    @AfterEach
+    void clearAttractionCache() {
+        List<String> keys = new ArrayList<>();
+        try (Cursor<byte[]> cursor = redis.executeWithStickyConnection(connection -> connection.keyCommands()
+                .scan(ScanOptions.scanOptions().match(CACHE_PREFIX + '*').count(500).build()))) {
+            cursor.forEachRemaining(key -> keys.add(new String(key, StandardCharsets.UTF_8)));
+        }
+        if (!keys.isEmpty()) {
+            redis.delete(keys);
+        }
+    }
 
     // ---------- 城市过滤 ----------
 
