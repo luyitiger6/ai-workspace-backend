@@ -352,3 +352,33 @@ INSERT IGNORE INTO attractions (
  '218 Anren Street, Huangpu District, Shanghai','上海市黄浦区安仁街218号',
  'Metro Line 10 or 14 to Yuyuan Garden, exit 1.','1-2 hours','2026-09-20 00:00:00.000',
  NULL,NULL,NULL);
+
+-- 景点评论。逐列对齐 post_comments：同一个仓库不在两张评论表上用两套形状，
+-- 将来真要接评论功能时，实体 / 仓储 / 服务可以照搬帖子评论那套分层。
+-- 归属列换成 attraction_id，指向 attractions.id（帖子那侧指向 posts.id）。
+-- 本期只建表：没有消费方，不提前产出实体、仓储与端点。
+CREATE TABLE IF NOT EXISTS attraction_comments (
+  id            BIGINT       NOT NULL AUTO_INCREMENT,
+  public_id     CHAR(26)     CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  attraction_id BIGINT       NOT NULL,
+  account_id    BIGINT       NOT NULL,
+  parent_id     BIGINT       NULL,
+  content       VARCHAR(2000) NOT NULL,
+  created_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at    DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  deleted_at    DATETIME(3)  NULL,
+  version       INT          NOT NULL DEFAULT 0,
+  created_by    BIGINT       NULL,
+  updated_by    BIGINT       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_attraction_comments_public_id (public_id),
+  KEY idx_attraction_comments_attraction (attraction_id, deleted_at, created_at DESC),
+  KEY idx_attraction_comments_parent (parent_id),
+  CONSTRAINT fk_attraction_comments_attraction FOREIGN KEY (attraction_id) REFERENCES attractions (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_attraction_comments_account FOREIGN KEY (account_id) REFERENCES accounts (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_attraction_comments_parent FOREIGN KEY (parent_id) REFERENCES attraction_comments (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_attraction_comments_version CHECK (version >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

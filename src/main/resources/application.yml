@@ -7,6 +7,13 @@ spring:
   application:
     name: my-first-project
 
+  # 封面图上传的容器级上限。单文件 5 MB 与 MediaRules.MAX_BYTES 对齐；
+  # 请求体留 1 MB 余量给 multipart 边界与头部，否则正好 5 MB 的文件会先被容器拒掉。
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
+
   datasource:
     # connectionTimeZone=UTC：应用写入的时间与库内存储保持同一时区基准
     url: "jdbc:mysql://127.0.0.1:8806/wanderchain?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&characterEncoding=utf8&allowPublicKeyRetrieval=true&useSSL=false"
@@ -69,6 +76,23 @@ wanderchain:
       source-window: 10m
       source-max: 20
       retry-after: 60s
+
+  # 封面图存储。同样不留代码内默认值：缺项启动即失败。
+  media:
+    # 落盘目录，相对路径按进程工作目录解析；容器里要挂成持久卷
+    root: ${WANDERCHAIN_MEDIA_ROOT:./media}
+    # 上传返回地址的前缀。默认指向前端同源代理，使图片与页面同源；
+    # 换域名或换部署拓扑时必须同步改这一项，否则历史封面地址会失效。
+    public-base-url: ${WANDERCHAIN_MEDIA_PUBLIC_BASE_URL:http://localhost:3000/api/media}
+
+  # 景点列表 / 榜单读缓存。缺项启动即失败。
+  attraction-cache:
+    # 缓存有效期：列表与榜单结果在这个窗口内复用，也就是可见的最大陈旧时间
+    ttl: ${WANDERCHAIN_ATTRACTION_CACHE_TTL:5m}
+    # 回源互斥锁的存活时间，必须大于最坏查询耗时
+    lock-ttl: ${WANDERCHAIN_ATTRACTION_CACHE_LOCK_TTL:5s}
+    # 未抢到锁的请求最多等这么久，必须小于 lock-ttl；耗尽后各自查库（不回写）
+    wait-timeout: ${WANDERCHAIN_ATTRACTION_CACHE_WAIT_TIMEOUT:1s}
 
 logging:
   level:

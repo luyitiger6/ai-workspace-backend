@@ -86,6 +86,8 @@ public class AuthInterceptor implements HandlerInterceptor {
         // 景点域只有两个公开读端点：列表/榜单与详情，没有写端点（design D1）。
         routes.put("/api/attractions", Set.of("GET"));
         routes.put("/api/attractions/*", Set.of("GET"));
+        // 媒体域只公开读：封面图要能被任何人看到。上传（POST /api/media）不登记，默认即受保护。
+        routes.put("/api/media/*", Set.of("GET"));
         return Map.copyOf(routes);
     }
 

@@ -10,6 +10,7 @@ import com.luyi.myfirst.service.attraction.model.AttractionPage;
 import com.luyi.myfirst.service.attraction.model.AttractionSummary;
 import com.luyi.myfirst.service.attraction.model.AttractionView;
 import com.luyi.myfirst.service.attraction.support.AttractionQuery;
+import com.luyi.myfirst.service.attraction.support.RankingCache;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -31,14 +32,21 @@ import java.util.List;
  * 可见性不在这一层判断：{@code status = published}、{@code deleted_at IS NULL}、
  * {@code verified_at IS NOT NULL} 三条已写进仓储的每条查询，服务层只负责把
  * 「查不到」翻译成 404。
+ *
+ * 列表与榜单外面包了一层 {@link RankingCache}：两条路各自的查询被封装成
+ * {@code Supplier} 交出去，缓存命中时根本不执行，因此「查库」的代码没有改动。
+ * 缓存有效期内的结果不反映库内改动（含软删除），窗口上界见
+ * {@code wanderchain.attraction-cache.ttl}。
  */
 @Service
 public class AttractionServiceImpl implements AttractionService {
 
     private final AttractionRepository attractions;
+    private final RankingCache cache;
 
-    public AttractionServiceImpl(AttractionRepository attractions) {
+    public AttractionServiceImpl(AttractionRepository attractions, RankingCache cache) {
         this.attractions = attractions;
+        this.cache = cache;
     }
 
     @Override
@@ -46,9 +54,11 @@ public class AttractionServiceImpl implements AttractionService {
     public AttractionPage list(String city, String sortBy, String collection, Integer limit) {
         AttractionQuery query = AttractionQuery.parse(city, sortBy, collection, limit);
         if (query.collection() != null) {
-            return curatedPage(query);
+            return cache.collection(query.collection(), query.citySlug(), query.limit(),
+                    () -> curatedPage(query));
         }
-        return listPage(query);
+        return cache.ranking(query.sortBy(), query.citySlug(), query.limit(),
+                () -> listPage(query));
     }
 
     @Override

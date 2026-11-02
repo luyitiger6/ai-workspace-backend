@@ -13,6 +13,9 @@ logs/
 *.log
 *.tmp
 
+# Uploaded media (local disk storage, see wanderchain.media.root)
+media/
+
 # OS
 .DS_Store
 Thumbs.db

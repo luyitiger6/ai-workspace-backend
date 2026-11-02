@@ -15,6 +15,7 @@ import com.luyi.myfirst.dao.post.repository.CommentRepository;
 import com.luyi.myfirst.dao.post.repository.PostRepository;
 import com.luyi.myfirst.dao.post.repository.VoteRepository;
 import com.luyi.myfirst.service.auth.model.VerifiedToken;
+import com.luyi.myfirst.service.media.MediaStorage;
 import com.luyi.myfirst.service.post.PostService;
 import com.luyi.myfirst.service.post.model.PostCommand;
 import com.luyi.myfirst.service.post.model.PostPage;
@@ -61,19 +62,22 @@ public class PostServiceImpl implements PostService {
     private final VoteRepository votes;
     private final BookmarkRepository bookmarks;
     private final PostReadAccess readAccess;
+    private final MediaStorage media;
 
     public PostServiceImpl(PostRepository posts,
                            AccountRepository accounts,
                            CommentRepository comments,
                            VoteRepository votes,
                            BookmarkRepository bookmarks,
-                           PostReadAccess readAccess) {
+                           PostReadAccess readAccess,
+                           MediaStorage media) {
         this.posts = posts;
         this.accounts = accounts;
         this.comments = comments;
         this.votes = votes;
         this.bookmarks = bookmarks;
         this.readAccess = readAccess;
+        this.media = media;
     }
 
     @Override
@@ -118,6 +122,9 @@ public class PostServiceImpl implements PostService {
         requireAuthor(post, author);
         post.delete(Instant.now());
         posts.saveAndFlush(post);
+        // 回收放在 DB 更新之后：删帖已经生效，文件清不掉也只是留个孤儿文件，
+        // 不该反过来让删除请求失败（spec「文件已缺失时删除仍成功」）。
+        media.deleteIfOwned(post.coverImage());
     }
 
     @Override
