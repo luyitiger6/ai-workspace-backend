@@ -1,0 +1,7 @@
+# 构建上下文只需要 jar：源码与构建中间产物都不进上下文。
+target/*
+!target/*.jar
+media/
+.git/
+tools/
+*.md

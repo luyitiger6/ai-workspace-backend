@@ -1,0 +1,110 @@
+# 后端单副本演示部署。配置全部经环境变量注入，仓库里的 application.yml 不动。
+# 依赖仍指向宿主机的 MySQL(8806) 与 Redis(6606)，所以要把 host.docker.internal 钉到 kind 网络网关。
+# 集群重建后网关可能变化，重新取一次：docker network inspect kind --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wanderchain-backend-secret
+type: Opaque
+stringData:
+  SPRING_DATASOURCE_USERNAME: root
+  SPRING_DATASOURCE_PASSWORD: root_123456
+  SPRING_DATA_REDIS_PASSWORD: "green-123!@qj"
+  WANDERCHAIN_JWT_SECRET: demo-only-jwt-secret-not-for-production
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wanderchain-backend
+  labels:
+    app: wanderchain-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wanderchain-backend
+  template:
+    metadata:
+      labels:
+        app: wanderchain-backend
+    spec:
+      hostAliases:
+        - ip: 172.29.0.1
+          hostnames:
+            - host.docker.internal
+      containers:
+        - name: backend
+          image: wanderchain-backend:demo
+          # 镜像由 kind load 直接从本机载入，集群内没有仓库可拉。
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8989
+          env:
+            # application.yml 里数据源地址是字面量 127.0.0.1，必须整体覆盖。
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:mysql://host.docker.internal:8806/wanderchain?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&characterEncoding=utf8&allowPublicKeyRetrieval=true&useSSL=false"
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: wanderchain-backend-secret
+                  key: SPRING_DATASOURCE_USERNAME
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wanderchain-backend-secret
+                  key: SPRING_DATASOURCE_PASSWORD
+            - name: SPRING_DATA_REDIS_HOST
+              value: host.docker.internal
+            - name: SPRING_DATA_REDIS_PORT
+              value: "6606"
+            - name: SPRING_DATA_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wanderchain-backend-secret
+                  key: SPRING_DATA_REDIS_PASSWORD
+            - name: WANDERCHAIN_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: wanderchain-backend-secret
+                  key: WANDERCHAIN_JWT_SECRET
+            - name: WANDERCHAIN_MEDIA_ROOT
+              value: /app/media
+            # 封面图对外地址必须与浏览器实际访问的源一致，否则存量封面会指向 localhost。
+            # 宿主机 80 被 Docker Desktop 的 WSL 中继占用，入口经 port-forward 到 19080，端口要带上。
+            - name: WANDERCHAIN_MEDIA_PUBLIC_BASE_URL
+              value: http://wanderchain.dev.local:19080/api/media
+            # 来源校验白名单。浏览器的写请求 Origin 是 Ingress 域名，不覆盖会全部 403。
+            # 列表型配置按注入顺序整体替换 yml 里的两项默认值。
+            - name: WANDERCHAIN_AUTH_ALLOWEDORIGINS_0
+              value: http://wanderchain.dev.local:19080
+            - name: WANDERCHAIN_AUTH_ALLOWEDORIGINS_1
+              value: http://localhost:3000
+          volumeMounts:
+            - name: media
+              mountPath: /app/media
+          readinessProbe:
+            # Spring Boot 冷启动要建连接池与建表，给的余量比前端大。
+            tcpSocket:
+              port: 8989
+            initialDelaySeconds: 40
+            periodSeconds: 10
+            failureThreshold: 6
+      volumes:
+        - name: media
+          # 演示用临时卷：Pod 重建后已上传封面图会丢，持久化不在本次范围。
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wanderchain-backend
+  labels:
+    app: wanderchain-backend
+spec:
+  selector:
+    app: wanderchain-backend
+  ports:
+    - name: http
+      port: 8989
+      targetPort: 8989
