@@ -14,7 +14,9 @@ logs/
 *.tmp
 
 # Uploaded media (local disk storage, see wanderchain.media.root)
-media/
+# 前导斜杠是必需的：不带斜杠的 media/ 会匹配任意层级，把
+# src/main/java/**/service/media 这类源码包也一起忽略。
+/media/
 
 # OS
 .DS_Store
