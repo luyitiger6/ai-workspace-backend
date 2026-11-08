@@ -2,6 +2,8 @@
 -- 规范来源：docs/db-design-spec.md §4（公共字段）、§5.3（软删除唯一）、§7（外键策略）
 -- 执行方式：spring.sql.init.mode=always，应用启动时幂等执行；本阶段不引入迁移框架。
 -- 幂等要求：每条建表都用 IF NOT EXISTS，重复启动不得报错、不得改变既有结构。
+-- 注意：accounts 表后续追加了 avatar_url / bio / interests 三列。CREATE TABLE IF NOT EXISTS
+-- 不会给已存在的表补列，已有本地库需 drop 重建（06 闸门即如此）或手工 ALTER TABLE accounts 追加这三列。
 -- 本文件同时承载景点种子数据（设计 D3）：06 闸门会 drop 重建本库，种子只有住在建表脚本里
 -- 才能随重建一起恢复；种子用固定 public_id + INSERT IGNORE 保证重复执行无副作用。
 
@@ -11,6 +13,9 @@ CREATE TABLE IF NOT EXISTS accounts (
   email          VARCHAR(255) NOT NULL,
   password_hash  VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   display_name   VARCHAR(64)  NOT NULL DEFAULT '',
+  avatar_url     VARCHAR(512) NOT NULL DEFAULT '',
+  bio            VARCHAR(200) NOT NULL DEFAULT '',
+  interests      VARCHAR(128) NOT NULL DEFAULT '',
   status         VARCHAR(16)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'active',
   token_version  INT          NOT NULL DEFAULT 0,
   created_at     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),

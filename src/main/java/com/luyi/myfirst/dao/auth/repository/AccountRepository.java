@@ -3,12 +3,23 @@ package com.luyi.myfirst.dao.auth.repository;
 import com.luyi.myfirst.dao.auth.entity.Account;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 /** 账户查询入口。令牌里的 sub 是对外标识，所以按 publicId 查而不是主键。 */
 public interface AccountRepository extends JpaRepository<Account, Long> {
 
     Optional<Account> findByPublicId(String publicId);
+
+    /**
+     * 按对外标识批量取「仍在」的账户。
+     *
+     * 判定条件用 deletedAt 而不是 status：注销是软删除，行仍在但 deleted_at 非空，
+     * 名片批量端点必须把它当「不存在」一样省略（spec「未知标识被省略」）。
+     * 集合里不存在或形状不合的取值自然查不到，与已注销行一样不返回，不单独报错。
+     */
+    List<Account> findByPublicIdInAndDeletedAtIsNull(Collection<String> publicIds);
 
     /**
      * 按邮箱查「仍占用它的」账户。

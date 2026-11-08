@@ -47,6 +47,16 @@ public class Account {
     @Column(name = "display_name", nullable = false, length = 64)
     private String displayName;
 
+    @Column(name = "avatar_url", nullable = false, length = 512)
+    private String avatarUrl;
+
+    @Column(nullable = false, length = 200)
+    private String bio;
+
+    /** 兴趣标签的存储形式：去重后半角逗号分隔，空集合存空串。边界由 service 层裁定。 */
+    @Column(nullable = false, length = 128)
+    private String interests;
+
     @Convert(converter = AccountStatusConverter.class)
     @Column(nullable = false, length = 16)
     private AccountStatus status;
@@ -89,9 +99,34 @@ public class Account {
         account.email = email;
         account.passwordHash = passwordHash;
         account.displayName = displayName;
+        account.avatarUrl = "";
+        account.bio = "";
+        account.interests = "";
         account.status = AccountStatus.ACTIVE;
         account.tokenVersion = 0;
         return account;
+    }
+
+    /**
+     * 资料部分更新：{@code null} 表示「未提交、保持原值」，空串表示「清空」。
+     *
+     * 只改被传入（非 null）的字段：部分更新靠这里保证「未提交的字段不会被 null 覆盖」，
+     * 而不是靠调用方先读再回传——那样读到的旧值会成为并发覆盖的窗口。
+     * 昵称的合法性在 service 层校验，这里不重复：实体不替上层做判定。
+     */
+    public void updateProfile(String displayName, String avatarUrl, String bio, String interests) {
+        if (displayName != null) {
+            this.displayName = displayName;
+        }
+        if (avatarUrl != null) {
+            this.avatarUrl = avatarUrl;
+        }
+        if (bio != null) {
+            this.bio = bio;
+        }
+        if (interests != null) {
+            this.interests = interests;
+        }
     }
 
     /**
@@ -153,6 +188,18 @@ public class Account {
 
     public String displayName() {
         return displayName;
+    }
+
+    public String avatarUrl() {
+        return avatarUrl;
+    }
+
+    public String bio() {
+        return bio;
+    }
+
+    public String interests() {
+        return interests;
     }
 
     public AccountStatus status() {
