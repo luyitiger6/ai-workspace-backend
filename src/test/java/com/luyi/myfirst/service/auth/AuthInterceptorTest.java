@@ -33,6 +33,7 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -114,6 +115,15 @@ class AuthInterceptorTest {
         mockMvc.perform(get("/probe/protected").cookie(new Cookie(AuthCookie.NAME, issued.value())))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.publicId").value(account.publicId()));
+    }
+
+    @Test
+    @DisplayName("资料域四个「路径+方法」组合：名片批量与标签清单公开，本人读写受保护")
+    void profileRoutesOwnership() {
+        assertThat(AuthInterceptor.isPublicRoute("GET", "/api/profiles")).isTrue();
+        assertThat(AuthInterceptor.isPublicRoute("GET", "/api/profile/interests")).isTrue();
+        assertThat(AuthInterceptor.isPublicRoute("PUT", "/api/profile")).isFalse();
+        assertThat(AuthInterceptor.isPublicRoute("GET", "/api/profile")).isFalse();
     }
 
     private Account persistAccount() {

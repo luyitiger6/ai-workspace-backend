@@ -88,6 +88,9 @@ public class AuthInterceptor implements HandlerInterceptor {
         routes.put("/api/attractions/*", Set.of("GET"));
         // 媒体域只公开读：封面图要能被任何人看到。上传（POST /api/media）不登记，默认即受保护。
         routes.put("/api/media/*", Set.of("GET"));
+        // 资料域公开两个读端点：名片批量与兴趣标签清单；本人资料读写（GET/PUT /api/profile）不登记，默认受保护（design D2）。
+        routes.put("/api/profiles", Set.of("GET"));
+        routes.put("/api/profile/interests", Set.of("GET"));
         return Map.copyOf(routes);
     }
 
