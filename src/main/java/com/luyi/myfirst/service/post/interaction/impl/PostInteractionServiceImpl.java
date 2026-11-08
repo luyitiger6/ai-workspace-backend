@@ -82,7 +82,9 @@ public class PostInteractionServiceImpl implements PostInteractionService {
         String content = validateCommentContent(command.content());
         Long parentId = resolveParentId(post.id(), command.parentPublicId());
         Comment comment = Comment.create(Ulid.generate(), post.id(), author.account().id(), parentId, content);
-        return toCommentView(comments.saveAndFlush(comment), post.publicId(), author.account().publicId(), command.parentPublicId());
+        Comment saved = comments.saveAndFlush(comment);
+        posts.incrementCommentCount(post.id(), 1);
+        return toCommentView(saved, post.publicId(), author.account().publicId(), command.parentPublicId());
     }
 
     @Override
@@ -96,6 +98,7 @@ public class PostInteractionServiceImpl implements PostInteractionService {
         requireAuthor(comment.authorId(), author);
         comment.delete(Instant.now());
         comments.saveAndFlush(comment);
+        posts.incrementCommentCount(post.id(), -1);
     }
 
     @Override
@@ -154,11 +157,22 @@ public class PostInteractionServiceImpl implements PostInteractionService {
         Optional<Vote> existing = votes.findByPostIdAndAuthorIdAndDeletedAtIsNull(post.id(), author.account().id());
         if (existing.isPresent()) {
             Vote vote = existing.get();
+            VoteDirection previous = vote.direction();
             vote.changeDirection(direction);
-            return new VoteResult(false, toVoteView(votes.saveAndFlush(vote), post.publicId(), author.account().publicId()));
+            VoteView view = toVoteView(votes.saveAndFlush(vote), post.publicId(), author.account().publicId());
+            int delta = upVoteDelta(previous, direction);
+            if (delta != 0) {
+                posts.incrementUpVoteCount(post.id(), delta);
+            }
+            return new VoteResult(false, view);
         }
         Vote vote = Vote.create(Ulid.generate(), post.id(), author.account().id(), direction);
-        return new VoteResult(true, toVoteView(votes.saveAndFlush(vote), post.publicId(), author.account().publicId()));
+        VoteView view = toVoteView(votes.saveAndFlush(vote), post.publicId(), author.account().publicId());
+        // 只统计赞成票：反对票建立 / 取消都不改变 upVoteCount。
+        if (direction == VoteDirection.UP) {
+            posts.incrementUpVoteCount(post.id(), 1);
+        }
+        return new VoteResult(true, view);
     }
 
     @Override
@@ -167,8 +181,13 @@ public class PostInteractionServiceImpl implements PostInteractionService {
         Post post = requireExistingPost(postPublicId);
         Optional<Vote> own = votes.findByPostIdAndAuthorIdAndDeletedAtIsNull(post.id(), author.account().id());
         if (own.isPresent()) {
-            own.get().delete(Instant.now());
-            votes.saveAndFlush(own.get());
+            Vote vote = own.get();
+            boolean wasUp = vote.direction() == VoteDirection.UP;
+            vote.delete(Instant.now());
+            votes.saveAndFlush(vote);
+            if (wasUp) {
+                posts.incrementUpVoteCount(post.id(), -1);
+            }
             return;
         }
         // 帖子存在投票但不是该用户投的：判 403；没有任何投票才判 404。
@@ -187,7 +206,9 @@ public class PostInteractionServiceImpl implements PostInteractionService {
             return new BookmarkResult(false, toBookmarkView(existing.get(), post.publicId(), author.account().publicId()));
         }
         Bookmark bookmark = Bookmark.create(Ulid.generate(), post.id(), author.account().id());
-        return new BookmarkResult(true, toBookmarkView(bookmarks.saveAndFlush(bookmark), post.publicId(), author.account().publicId()));
+        BookmarkView view = toBookmarkView(bookmarks.saveAndFlush(bookmark), post.publicId(), author.account().publicId());
+        posts.incrementBookmarkCount(post.id(), 1);
+        return new BookmarkResult(true, view);
     }
 
     @Override
@@ -198,6 +219,7 @@ public class PostInteractionServiceImpl implements PostInteractionService {
         if (own.isPresent()) {
             own.get().delete(Instant.now());
             bookmarks.saveAndFlush(own.get());
+            posts.incrementBookmarkCount(post.id(), -1);
             return;
         }
         // 帖子存在收藏但不是该用户收藏的：判 403；没有任何收藏才判 404。
@@ -255,6 +277,18 @@ public class PostInteractionServiceImpl implements PostInteractionService {
             throw validationFailed();
         }
         return direction;
+    }
+
+    /**
+     * 换向时的计数差额。
+     *
+     * {@code up_vote_count} 只统计赞成票，所以只看方向的布尔值：
+     * up→down 减一、down→up 加一、同向不变。
+     */
+    private static int upVoteDelta(VoteDirection previous, VoteDirection next) {
+        int before = previous == VoteDirection.UP ? 1 : 0;
+        int after = next == VoteDirection.UP ? 1 : 0;
+        return after - before;
     }
 
     private static void requireAuthor(Long authorId, VerifiedToken caller) {

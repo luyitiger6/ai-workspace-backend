@@ -20,8 +20,6 @@ public interface CommentRepository extends JpaRepository<Comment, Long> {
 
     Optional<Comment> findByPublicIdAndDeletedAtIsNull(String publicId);
 
-    long countByPostIdAndDeletedAtIsNull(Long postId);
-
     /** 评论首页：按创建时间倒序、id 倒序兜底。 */
     @Query("""
             select c from Comment c

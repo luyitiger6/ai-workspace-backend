@@ -9,7 +9,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -18,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 帖子持久化的两条底线：对外标识能查到、软删除后查不到；
@@ -37,6 +40,9 @@ class PostRepositoryTest {
 
     @Autowired
     private AccountRepository accounts;
+
+    @Autowired
+    private JdbcTemplate jdbc;
 
     @Test
     @DisplayName("保存后可按对外标识查到，标签与状态往返无损")
@@ -100,6 +106,86 @@ class PostRepositoryTest {
         assertThat(seen).allMatch(id -> created.stream().anyMatch(p -> p.id().equals(id)));
         // id 倒序兜底：同一毫秒里靠 id 决定先后，否则同秒的第 3 条会既不在第一页也不在第二页。
         assertThat(seen).isSortedAccordingTo((left, right) -> Long.compare(right, left));
+    }
+
+    @Test
+    @DisplayName("计数增量：三列各自 +1/-1，updatedAt 不变，已软删除的帖子更新 0 行")
+    void counterIncrementsAreAtomicAndSkipSoftDeleted() {
+        Account author = seedAccount();
+        Post post = Post.create(Ulid.generate(), author.id(), "Counter", "Body", null,
+                List.of(), PostStatus.PUBLISHED, Instant.now());
+        Post saved = posts.saveAndFlush(post);
+        Long id = saved.id();
+        Instant updatedBefore = saved.updatedAt();
+
+        assertThat(posts.incrementUpVoteCount(id, 1)).isEqualTo(1);
+        assertThat(posts.incrementCommentCount(id, 1)).isEqualTo(1);
+        assertThat(posts.incrementBookmarkCount(id, 1)).isEqualTo(1);
+
+        // 增量是原生 update：clearAutomatically 已清一级缓存，重查读到的就是库里的列值。
+        Post afterIncrement = posts.findById(id).orElseThrow();
+        assertThat(afterIncrement.upVoteCount()).isEqualTo(1);
+        assertThat(afterIncrement.commentCount()).isEqualTo(1);
+        assertThat(afterIncrement.bookmarkCount()).isEqualTo(1);
+        // 计数变化不能刷新 updated_at：一次点赞把帖子顶到 feed 顶部是另一种 bug。
+        assertThat(afterIncrement.updatedAt()).isEqualTo(updatedBefore);
+
+        assertThat(posts.incrementUpVoteCount(id, -1)).isEqualTo(1);
+        assertThat(posts.findById(id).orElseThrow().upVoteCount()).isZero();
+
+        // 软删除之后增量必须落空：where deleted_at is null 把行挡在外面，
+        // 否则计数会在不可见的行上继续漂移。
+        afterIncrement.delete(Instant.now());
+        posts.saveAndFlush(afterIncrement);
+        assertThat(posts.incrementUpVoteCount(id, 1)).isZero();
+        assertThat(posts.findById(id).orElseThrow().upVoteCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("按计数排序：upVoteCount / commentCount 降序，计数游标续页不跳过不重复")
+    void countOrderedFeedsRespectCursor() {
+        Account author = seedAccount();
+        Post low = posts.saveAndFlush(Post.create(Ulid.generate(), author.id(), "Low", "Body", null,
+                List.of(), PostStatus.PUBLISHED, Instant.now()));
+        Post mid = posts.saveAndFlush(Post.create(Ulid.generate(), author.id(), "Mid", "Body", null,
+                List.of(), PostStatus.PUBLISHED, Instant.now()));
+        Post high = posts.saveAndFlush(Post.create(Ulid.generate(), author.id(), "High", "Body", null,
+                List.of(), PostStatus.PUBLISHED, Instant.now()));
+        posts.incrementUpVoteCount(low.id(), 1);
+        posts.incrementUpVoteCount(mid.id(), 2);
+        posts.incrementUpVoteCount(high.id(), 3);
+        posts.incrementCommentCount(mid.id(), 5);
+
+        assertThat(posts.findFeedByUpVoteCount(PostStatus.PUBLISHED, PageRequest.ofSize(10)))
+                .extracting(Post::id)
+                .containsSubsequence(high.id(), mid.id(), low.id());
+        assertThat(posts.findFeedByCommentCount(PostStatus.PUBLISHED, PageRequest.ofSize(10)))
+                .extracting(Post::id)
+                .startsWith(mid.id());
+
+        // 计数游标：首页末条是 3 票的 high，续页必须从 2 票开始。
+        // 若游标条件只比较 id（旧实现的残留写法），mid 会被整段跳过。
+        List<Post> firstPage = posts.findFeedByUpVoteCount(PostStatus.PUBLISHED, PageRequest.ofSize(1));
+        assertThat(firstPage).hasSize(1);
+        Post cursor = firstPage.get(0);
+        assertThat(cursor.id()).isEqualTo(high.id());
+        assertThat(posts.findFeedByUpVoteCountAfter(PostStatus.PUBLISHED, cursor.upVoteCount(),
+                cursor.publishedAt(), cursor.id(), PageRequest.ofSize(1)))
+                .extracting(Post::id)
+                .contains(mid.id())
+                .doesNotContain(high.id());
+    }
+
+    @Test
+    @DisplayName("计数列不可为负：直接写入负值被 CHECK 约束拒绝")
+    void negativeCounterIsRejectedByCheckConstraint() {
+        Account author = seedAccount();
+        Post saved = posts.saveAndFlush(Post.create(Ulid.generate(), author.id(), "Negative", "Body", null,
+                List.of(), PostStatus.PUBLISHED, Instant.now()));
+
+        assertThatThrownBy(() -> jdbc.update("update posts set up_vote_count = -1 where id = ?", saved.id()))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("ck_posts_up_vote_count");
     }
 
     private Account seedAccount() {
