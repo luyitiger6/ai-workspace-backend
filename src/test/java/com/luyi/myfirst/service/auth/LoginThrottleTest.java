@@ -107,7 +107,9 @@ class LoginThrottleTest {
                 "test-only-secret",
                 false,
                 List.of("http://localhost:3000"),
-                List.of(),
+                // 信任边界不能为空，否则 AuthProperties 构造即失败；这里给回环即可，
+                // 本用例并不校验来源解析，只校验计数行为。
+                List.of("127.0.0.1/32"),
                 new AuthProperties.Captcha(Duration.ofMinutes(2)),
                 new AuthProperties.EmailCode(Duration.ofMinutes(5), Duration.ofSeconds(60), 5, 5),
                 new AuthProperties.Login(failThreshold, Duration.ofMinutes(10), sourceMax, Duration.ofSeconds(60)));
