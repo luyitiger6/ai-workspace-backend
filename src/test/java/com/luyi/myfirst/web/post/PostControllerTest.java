@@ -12,15 +12,19 @@ import com.luyi.myfirst.dao.auth.repository.AuthSessionRepository;
 import com.luyi.myfirst.service.auth.model.IssuedToken;
 import com.luyi.myfirst.service.auth.support.TokenIssuer;
 import com.luyi.myfirst.web.auth.AuthCookie;
+import com.luyi.myfirst.web.auth.interceptor.WriteRateLimitBuckets;
 import com.luyi.myfirst.web.post.dto.PostCreateRequest;
 import com.luyi.myfirst.web.post.dto.PostResponse;
 import com.luyi.myfirst.web.post.dto.PostSummaryResponse;
 import jakarta.servlet.http.Cookie;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
@@ -67,6 +71,19 @@ class PostControllerTest {
 
     @Autowired
     private AuthSessionRepository sessions;
+
+    @Autowired
+    private StringRedisTemplate redis;
+
+    /**
+     * 写限流计数落在共享 Redis 上，事务回滚救不了它：不清掉，同类或套件里下一个用例
+     * 会继承额度，在毫不相关的断言处收到 429。用例前后各清一次，残留不跨用例。
+     */
+    @BeforeEach
+    @AfterEach
+    void resetWriteRateLimitBuckets() {
+        WriteRateLimitBuckets.clear(redis);
+    }
 
     // ---------- 5.1 五个端点与类型标记 ----------
 

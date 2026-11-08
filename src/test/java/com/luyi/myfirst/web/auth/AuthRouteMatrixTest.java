@@ -1,7 +1,10 @@
 package com.luyi.myfirst.web.auth;
 
 import com.luyi.myfirst.web.auth.interceptor.AuthInterceptor;
+import com.luyi.myfirst.web.auth.interceptor.WriteRateLimitBuckets;
 import jakarta.servlet.http.Cookie;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -10,6 +13,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.test.web.servlet.MockMvc;
@@ -43,6 +47,20 @@ class AuthRouteMatrixTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private StringRedisTemplate redis;
+
+    /**
+     * 本类为验证路由归属会发若干非 auth 写请求，它们会计入共享 Redis 上的写限流桶。
+     * 不清掉，后续用例（如只给 unknown 两次额度的写限流链式测试）会被这里的残留
+     * 打成假红——那看起来是限流坏了，实际是上一节课留下的计数。
+     */
+    @BeforeEach
+    @AfterEach
+    void resetWriteRateLimitBuckets() {
+        WriteRateLimitBuckets.clear(redis);
+    }
 
     static Stream<Arguments> routeMatrix() {
         String postId = "postid0000000000000000001";

@@ -60,10 +60,13 @@ wanderchain:
       - http://127.0.0.1:3000
     # 来源限流的信任边界：只有来自这些地址/网段的请求，其 X-Forwarded-For 才被采信，
     # 且只取最右一跳（代理自己追加的那个）。直达请求自带的转发头一律不采信。
-    # 空列表是当前拓扑的诚实取值：前端 Next Route Handler 拿不到客户端 IP，也就不会
-    # 追加可信跳，所以现在每个请求都归入「未知来源」单桶——比直信转发头安全得多。
-    # 在前后端之间接入 nginx / ALB 这类会追加 X-Forwarded-For 的代理后，登记它的出口地址。
-    trusted-proxies: []
+    # 默认值是本机回环：本地开发直连后端时，对端地址在网络层就是回环，这不是乐观假设。
+    # 生产 MUST 整体替换为前端代理所在网段（环境变量按下标注入：
+    # WANDERCHAIN_AUTH_TRUSTED_PROXIES_0、_1……）。留空会让每个请求都归入「未知来源」单桶，
+    # 来源限流退化成全站一份额度，因此空列表被 AuthProperties 显式拒绝为启动失败。
+    trusted-proxies:
+      - 127.0.0.1/32
+      - ::1/128
     captcha:
       ttl: 2m
     email-code:
@@ -76,6 +79,16 @@ wanderchain:
       source-window: 10m
       source-max: 20
       retry-after: 60s
+
+  # 写操作来源限流（spec「全站写操作来源限流」）。缺项启动即失败。
+  rate-limit:
+    write:
+      # 固定窗口：从该来源的第一次写请求起算，窗口结束后计数自动过期
+      window: 1m
+      # 已解析来源在窗口内的写请求上限
+      max: 60
+      # 未知来源的独立上限：小于 max，使代理配置异常时只影响无转发头的请求
+      unknown-max: 20
 
   # 封面图存储。同样不留代码内默认值：缺项启动即失败。
   media:

@@ -10,6 +10,7 @@ import com.luyi.myfirst.dao.auth.repository.AuthSessionRepository;
 import com.luyi.myfirst.service.auth.model.IssuedToken;
 import com.luyi.myfirst.service.auth.support.TokenIssuer;
 import com.luyi.myfirst.web.auth.AuthCookie;
+import com.luyi.myfirst.web.auth.interceptor.WriteRateLimitBuckets;
 import com.luyi.myfirst.web.post.dto.PostCreateRequest;
 import com.luyi.myfirst.web.post.interaction.dto.BookmarkResponse;
 import com.luyi.myfirst.web.post.interaction.dto.CommentCreateRequest;
@@ -18,11 +19,14 @@ import com.luyi.myfirst.web.post.interaction.dto.CommentResponse;
 import com.luyi.myfirst.web.post.interaction.dto.VoteCreateRequest;
 import com.luyi.myfirst.web.post.interaction.dto.VoteResponse;
 import jakarta.servlet.http.Cookie;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
@@ -52,7 +56,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 状态码、错误码、来源校验、字段白名单在这里钉住；
  * 业务状态变化由 {@link com.luyi.myfirst.service.post.interaction.PostInteractionServiceTest} 覆盖。
  */
-@SpringBootTest
+// 本类断言 HTTP 契约，不验证限流；分页用例一次要写 56 次（1 帖 + 55 条评论），
+// 超过默认未知来源额度（20 次/分钟）。限流本身由 WriteRateLimit*Test 用紧凑额度覆盖，
+// 这里把未知来源额度放到足够大，避免「断言 201 却拿到 429」。
+@SpringBootTest(properties = "wanderchain.rate-limit.write.unknown-max=1000")
 @AutoConfigureMockMvc
 @Transactional
 class PostInteractionControllerTest {
@@ -73,6 +80,19 @@ class PostInteractionControllerTest {
 
     @Autowired
     private AuthSessionRepository sessions;
+
+    @Autowired
+    private StringRedisTemplate redis;
+
+    /**
+     * 写限流计数落在共享 Redis 上，事务回滚救不了它：不清掉，同类或套件里下一个用例
+     * 会继承额度，在毫不相关的断言处收到 429。用例前后各清一次，残留不跨用例。
+     */
+    @BeforeEach
+    @AfterEach
+    void resetWriteRateLimitBuckets() {
+        WriteRateLimitBuckets.clear(redis);
+    }
 
     // ---------- 白名单与端点存在性 ----------
 

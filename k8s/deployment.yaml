@@ -80,6 +80,15 @@ spec:
               value: http://wanderchain.dev.local:19080
             - name: WANDERCHAIN_AUTH_ALLOWEDORIGINS_1
               value: http://localhost:3000
+            # 来源限流的信任边界：只有来自这些网段的请求，其 X-Forwarded-For 才被采信。
+            # 集群链路是「Ingress → 前端 Pod → 后端」，转发头的最后一跳由前端 Next Route
+            # Handler 原样写入，所以这里登记的是 Pod 网段（kind 默认 CNI 为 10.244.0.0/16；
+            # 换集群按实际 cluster-cidr 核对）。
+            # 不注入时后端退回 yml 里的回环默认值，全部请求会落入「未知来源」桶——
+            # 额度更小但仍有限流，是安全降级而不是绕过。
+            # 列表型配置按下标注入，与上面 ALLOWEDORIGINS 同一写法。
+            - name: WANDERCHAIN_AUTH_TRUSTED_PROXIES_0
+              value: 10.244.0.0/16
           volumeMounts:
             - name: media
               mountPath: /app/media

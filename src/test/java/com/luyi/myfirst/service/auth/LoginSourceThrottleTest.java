@@ -35,8 +35,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 正确密码也拿不到令牌——来源闸门在成功路径之前；
  * 错误密码不留下任何账户维度的失败痕迹——密码比对压根没发生。
  *
- * 本类故意用真实来源策略：MockMvc 的对端地址不在 trusted-proxies 里，请求因此按
- * 「未知来源」计数——这也是 application.yml 把 trusted-proxies 留空后生产上的实际行为。
+ * 本类故意用真实来源策略：MockMvc 的对端是回环（已在 trusted-proxies 里），但请求不带
+ * X-Forwarded-For——可信对端拿不出可采信的最后一跳，因此仍归入「未知来源」桶。
+ * 这正是生产上前端代理没追加转发头时的降级形态，也是本类要覆盖的那一种。
  * 用例自己把额度灌满，留在桶里由窗口 TTL 收回：它只影响同样走真实来源的用例，
  * 而其他登录用例都换成了各自的随机来源键。
  */
