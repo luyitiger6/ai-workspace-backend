@@ -37,4 +37,15 @@ public interface PostService {
      * 不一致时也判为非法游标。
      */
     PostPage feed(String sortBy, String cursor, Integer limit);
+
+    /**
+     * 用户页列表：某个作者的已发布帖子，按发布时刻倒序、游标分页。
+     *
+     * 排序维度固定为 {@code publishedAt}，所以不接 {@code sortBy}；游标里若带着别的
+     * 排序维度就判为非法游标。作者不存在或已注销抛 {@code PROFILE_NOT_FOUND}——
+     * 与公开资料读取同口径（spec「用户页帖子列表的范围」）。
+     *
+     * 作者本人也不放宽：草稿不出现，作者与游客看到同一份列表（design D8）。
+     */
+    PostPage feedByAuthor(String authorPublicId, String cursor, Integer limit);
 }

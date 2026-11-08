@@ -17,6 +17,13 @@ public interface ProfileService {
 
     ProfileView read(VerifiedToken verified);
 
+    /**
+     * 按对外标识公开读取四项资料。不存在、已注销与形状不合一律抛
+     * {@code PROFILE_NOT_FOUND}，不用不同状态码或错误码区分原因
+     * （spec「公开用户资料的未找到口径」）。
+     */
+    ProfileView readPublic(String publicId);
+
     ProfileView update(VerifiedToken verified, ProfileUpdate command);
 
     /**

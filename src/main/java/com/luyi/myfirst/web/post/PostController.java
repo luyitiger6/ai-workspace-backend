@@ -7,7 +7,6 @@ import com.luyi.myfirst.service.auth.model.VerifiedToken;
 import com.luyi.myfirst.service.post.PostService;
 import com.luyi.myfirst.service.post.model.PostCommand;
 import com.luyi.myfirst.service.post.model.PostPage;
-import com.luyi.myfirst.service.post.model.PostSummary;
 import com.luyi.myfirst.service.post.model.PostView;
 import com.luyi.myfirst.web.auth.interceptor.AuthInterceptor;
 import com.luyi.myfirst.web.post.dto.PostCreateRequest;
@@ -90,7 +89,7 @@ public class PostController {
             @RequestParam(required = false) Integer limit) {
         PostPage page = postService.feed(sortBy, cursor, limit);
         return ResponseEntity.ok(new PostFeedResponse(
-                page.items().stream().map(PostController::toSummary).toList(),
+                page.items().stream().map(PostSummaryResponse::from).toList(),
                 page.nextCursor()));
     }
 
@@ -135,20 +134,5 @@ public class PostController {
                 view.commentCount(),
                 view.upVoteCount(),
                 view.bookmarkCount());
-    }
-
-    private static PostSummaryResponse toSummary(PostSummary summary) {
-        return new PostSummaryResponse(
-                summary.publicId(),
-                summary.title(),
-                summary.coverImage(),
-                summary.tags(),
-                summary.status().dbValue(),
-                summary.authorPublicId(),
-                summary.createdAt(),
-                summary.updatedAt(),
-                summary.commentCount(),
-                summary.upVoteCount(),
-                summary.bookmarkCount());
     }
 }

@@ -1,10 +1,12 @@
 package com.luyi.myfirst.service.post;
 
+import com.luyi.myfirst.common.enums.PostSortBy;
 import com.luyi.myfirst.common.enums.PostStatus;
 import com.luyi.myfirst.common.enums.VoteDirection;
 import com.luyi.myfirst.common.exception.AuthErrorEnum;
 import com.luyi.myfirst.common.exception.BizException;
 import com.luyi.myfirst.common.exception.PostErrorEnum;
+import com.luyi.myfirst.common.exception.ProfileErrorEnum;
 import com.luyi.myfirst.common.id.Ulid;
 import com.luyi.myfirst.dao.auth.entity.Account;
 import com.luyi.myfirst.dao.auth.repository.AccountRepository;
@@ -18,6 +20,7 @@ import com.luyi.myfirst.service.post.model.PostCommand;
 import com.luyi.myfirst.service.post.model.PostPage;
 import com.luyi.myfirst.service.post.model.PostSummary;
 import com.luyi.myfirst.service.post.model.PostView;
+import com.luyi.myfirst.service.post.support.FeedCursor;
 import jakarta.persistence.EntityManager;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.DisplayName;
@@ -27,6 +30,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -354,6 +358,86 @@ class PostServiceTest {
         assertCounts(service.read(publicId, null), 0, 0, 1);
         interactions.cancelBookmark(author, publicId);
         assertCounts(service.read(publicId, author), 0, 0, 0);
+    }
+
+    // ---------- R4 补充：用户页列表 ----------
+
+    @Test
+    @DisplayName("用户页列表：只含该作者的已发布帖子，草稿与他人帖子都不出现")
+    void authorFeedContainsOnlyPublishedByThatAuthor() {
+        VerifiedToken author = newToken("作者甲");
+        VerifiedToken other = newToken("路人乙");
+        PostView mine = service.publish(author, published("我的已发布"));
+        PostView myDraft = service.publish(author, draft("我的草稿"));
+        PostView theirs = service.publish(other, published("别人的已发布"));
+
+        PostPage page = service.feedByAuthor(author.account().publicId(), null, 20);
+
+        assertThat(page.items()).extracting(PostSummary::publicId)
+                .containsExactly(mine.publicId())
+                .doesNotContain(myDraft.publicId(), theirs.publicId());
+    }
+
+    @Test
+    @DisplayName("用户页列表：没有已发布帖子时返回空列表而不是 404")
+    void authorFeedIsEmptyNotMissing() {
+        VerifiedToken author = newToken("只有草稿");
+        service.publish(author, draft("草稿"));
+
+        PostPage page = service.feedByAuthor(author.account().publicId(), null, 20);
+
+        assertThat(page.items()).isEmpty();
+        assertThat(page.nextCursor()).isNull();
+    }
+
+    @Test
+    @DisplayName("用户页列表：未知与已注销的作者都是 404 PROFILE_NOT_FOUND")
+    void authorFeedRejectsUnknownAndDeletedAuthor() {
+        assertThat(rejectionOf(() -> service.feedByAuthor(Ulid.generate(), null, 20)).getErrorCode())
+                .isEqualTo(ProfileErrorEnum.PROFILE_NOT_FOUND.getErrorCode());
+
+        VerifiedToken gone = newToken("已注销");
+        gone.account().delete(Instant.now());
+        accounts.saveAndFlush(gone.account());
+
+        assertThat(rejectionOf(() -> service.feedByAuthor(gone.account().publicId(), null, 20)).getErrorCode())
+                .isEqualTo(ProfileErrorEnum.PROFILE_NOT_FOUND.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("用户页列表翻页：游标续页不重复不遗漏")
+    void authorFeedPagesByCursor() {
+        VerifiedToken author = newToken("多产作者");
+        for (int index = 0; index < 3; index++) {
+            service.publish(author, published("第 " + index + " 篇"));
+        }
+
+        PostPage first = service.feedByAuthor(author.account().publicId(), null, 2);
+        assertThat(first.items()).hasSize(2);
+        assertThat(first.nextCursor()).isNotNull();
+
+        PostPage second = service.feedByAuthor(author.account().publicId(), first.nextCursor(), 2);
+        List<String> firstIds = first.items().stream().map(PostSummary::publicId).toList();
+        List<String> secondIds = second.items().stream().map(PostSummary::publicId).toList();
+
+        assertThat(secondIds).doesNotContainAnyElementsOf(firstIds);
+        assertThat(second.nextCursor()).isNull();
+        assertThat(firstIds.size() + secondIds.size()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("用户页列表：非法游标与非时间倒序游标都是 400")
+    void authorFeedRejectsBrokenAndForeignCursor() {
+        VerifiedToken author = newToken("作者甲");
+        service.publish(author, published("一"));
+
+        assertThat(rejectionOf(() -> service.feedByAuthor(author.account().publicId(), "not-a-cursor", 20))
+                .getErrorCode()).isEqualTo(AuthErrorEnum.VALIDATION_FAILED.getErrorCode());
+
+        // 点赞数排序的游标塞进用户页（只按时间排）：排序维度不匹配，判非法。
+        String upVoteCursor = new FeedCursor(PostSortBy.UP_VOTE_COUNT, Instant.now(), 3L, 1L).encode();
+        assertThat(rejectionOf(() -> service.feedByAuthor(author.account().publicId(), upVoteCursor, 20))
+                .getErrorCode()).isEqualTo(AuthErrorEnum.VALIDATION_FAILED.getErrorCode());
     }
 
     // ---------- R5 详情公开且草稿对他人不可见 ----------

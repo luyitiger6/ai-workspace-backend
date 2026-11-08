@@ -188,6 +188,65 @@ class PostRepositoryTest {
                 .hasMessageContaining("ck_posts_up_vote_count");
     }
 
+    @Test
+    @DisplayName("用户页列表：只返回该作者的帖子，他人帖子不出现")
+    void authorFeedFiltersByAuthor() {
+        Account author = seedAccount();
+        Account other = seedAccount();
+        Post mine = posts.saveAndFlush(Post.create(Ulid.generate(), author.id(), "Mine", "Body", null,
+                List.of(), PostStatus.PUBLISHED, Instant.now()));
+        posts.saveAndFlush(Post.create(Ulid.generate(), other.id(), "Theirs", "Body", null,
+                List.of(), PostStatus.PUBLISHED, Instant.now()));
+
+        assertThat(posts.findPublishedByAuthor(author.id(), PostStatus.PUBLISHED, PageRequest.ofSize(10)))
+                .extracting(Post::publicId)
+                .containsExactly(mine.publicId());
+    }
+
+    @Test
+    @DisplayName("用户页列表：作者本人的草稿也不出现")
+    void authorFeedSkipsDrafts() {
+        Account author = seedAccount();
+        posts.saveAndFlush(Post.create(Ulid.generate(), author.id(), "Draft", "Body", null,
+                List.of(), PostStatus.DRAFT, Instant.now()));
+
+        assertThat(posts.findPublishedByAuthor(author.id(), PostStatus.PUBLISHED, PageRequest.ofSize(10)))
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("用户页列表：已软删除的帖子不出现")
+    void authorFeedSkipsSoftDeleted() {
+        Account author = seedAccount();
+        Post post = posts.saveAndFlush(Post.create(Ulid.generate(), author.id(), "Gone", "Body", null,
+                List.of(), PostStatus.PUBLISHED, Instant.now()));
+        post.delete(Instant.now());
+        posts.saveAndFlush(post);
+
+        assertThat(posts.findPublishedByAuthor(author.id(), PostStatus.PUBLISHED, PageRequest.ofSize(10)))
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("用户页列表：同一毫秒两条按 id 倒序，游标之后不重复不遗漏")
+    void authorFeedCursorIsStableAtSameMillisecond() {
+        Account author = seedAccount();
+        Instant sameInstant = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        Post first = posts.saveAndFlush(Post.create(Ulid.generate(), author.id(), "First", "Body", null,
+                List.of(), PostStatus.PUBLISHED, sameInstant));
+        Post second = posts.saveAndFlush(Post.create(Ulid.generate(), author.id(), "Second", "Body", null,
+                List.of(), PostStatus.PUBLISHED, sameInstant));
+
+        List<Post> page = posts.findPublishedByAuthor(author.id(), PostStatus.PUBLISHED, PageRequest.ofSize(10));
+        assertThat(page).extracting(Post::id).containsExactly(second.id(), first.id());
+
+        Post cursor = page.get(0);
+        assertThat(posts.findPublishedByAuthorAfter(author.id(), PostStatus.PUBLISHED,
+                cursor.publishedAt(), cursor.id(), PageRequest.ofSize(10)))
+                .extracting(Post::id)
+                .containsExactly(first.id());
+    }
+
     private Account seedAccount() {
         String publicId = Ulid.generate();
         Account account = Account.createActive(publicId, publicId.toLowerCase() + "@example.com",

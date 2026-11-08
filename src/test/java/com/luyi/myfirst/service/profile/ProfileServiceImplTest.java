@@ -121,6 +121,57 @@ class ProfileServiceImplTest {
         assertThat(cards).extracting(ProfileCard::publicId).containsExactly(alive.publicId());
     }
 
+    @Test
+    @DisplayName("公开读：按对外标识返回四项资料")
+    void readPublicReturnsFourFields() {
+        Account account = seed("Alice");
+        account.updateProfile("Alice", "https://a.example/a.png", "简介", "hiking,food");
+        accounts.saveAndFlush(account);
+
+        ProfileView view = profileService.readPublic(account.publicId());
+
+        assertThat(view.publicId()).isEqualTo(account.publicId());
+        assertThat(view.displayName()).isEqualTo("Alice");
+        assertThat(view.avatarUrl()).isEqualTo("https://a.example/a.png");
+        assertThat(view.bio()).isEqualTo("简介");
+        assertThat(view.interests()).containsExactly("hiking", "food");
+    }
+
+    @Test
+    @DisplayName("公开读：未填写的资料返回空串与空数组，不是 null")
+    void readPublicReturnsEmptyDefaults() {
+        Account account = seed("Blank");
+
+        ProfileView view = profileService.readPublic(account.publicId());
+
+        assertThat(view.avatarUrl()).isEmpty();
+        assertThat(view.bio()).isEmpty();
+        assertThat(view.interests()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("公开读：已注销的标识按不存在处理")
+    void readPublicRejectsDeleted() {
+        Account deleted = seed("Deleted");
+        deleted.delete(Instant.now());
+        accounts.saveAndFlush(deleted);
+
+        assertProfileNotFound(deleted.publicId());
+    }
+
+    @Test
+    @DisplayName("公开读：不存在与形状不合同一个出口")
+    void readPublicRejectsUnknown() {
+        assertProfileNotFound(Ulid.generate());
+        assertProfileNotFound("not-a-ulid");
+    }
+
+    private void assertProfileNotFound(String publicId) {
+        assertThatThrownBy(() -> profileService.readPublic(publicId))
+                .isInstanceOfSatisfying(BizException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("PROFILE_NOT_FOUND"));
+    }
+
     private Account seed(String displayName) {
         String publicId = Ulid.generate();
         return accounts.saveAndFlush(Account.createActive(

@@ -2,6 +2,7 @@ package com.luyi.myfirst.service.profile.impl;
 
 import com.luyi.myfirst.common.exception.AuthErrorEnum;
 import com.luyi.myfirst.common.exception.BizException;
+import com.luyi.myfirst.common.exception.ProfileErrorEnum;
 import com.luyi.myfirst.dao.auth.entity.Account;
 import com.luyi.myfirst.dao.auth.repository.AccountRepository;
 import com.luyi.myfirst.service.auth.model.VerifiedToken;
@@ -39,6 +40,15 @@ public class ProfileServiceImpl implements ProfileService {
     @Transactional(readOnly = true)
     public ProfileView read(VerifiedToken verified) {
         return toView(verified.account());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ProfileView readPublic(String publicId) {
+        // 查不到、已注销与形状不合走同一条出口：公开端点不区分「为什么没找到」。
+        return accounts.findByPublicIdAndDeletedAtIsNull(publicId)
+                .map(ProfileServiceImpl::toView)
+                .orElseThrow(() -> new BizException(ProfileErrorEnum.PROFILE_NOT_FOUND));
     }
 
     @Override

@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS posts (
   KEY idx_posts_up_vote_count (status, deleted_at, up_vote_count DESC, id DESC),
   KEY idx_posts_comment_count (status, deleted_at, comment_count DESC, id DESC),
   KEY idx_posts_author (author_id, deleted_at, created_at DESC),
+  -- 用户页列表的形态：(作者等值, 状态等值, 软删除等值, 排序列 DESC, id DESC)。
+  -- 不复用 idx_posts_author：那一条按 created_at 排、不含 status，用户页按 published_at 排且只取已发布。
+  KEY idx_posts_author_published (author_id, status, deleted_at, published_at DESC, id DESC),
   CONSTRAINT fk_posts_author FOREIGN KEY (author_id) REFERENCES accounts (id)
     ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT ck_posts_status CHECK (status IN ('draft', 'published')),

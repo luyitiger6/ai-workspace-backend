@@ -118,10 +118,13 @@ class AuthInterceptorTest {
     }
 
     @Test
-    @DisplayName("资料域四个「路径+方法」组合：名片批量与标签清单公开，本人读写受保护")
+    @DisplayName("资料域七个「路径+方法」组合：名片批量、标签清单、公开资料与其帖子列表公开，本人读写不公开")
     void profileRoutesOwnership() {
         assertThat(AuthInterceptor.isPublicRoute("GET", "/api/profiles")).isTrue();
         assertThat(AuthInterceptor.isPublicRoute("GET", "/api/profile/interests")).isTrue();
+        assertThat(AuthInterceptor.isPublicRoute("GET", "/api/profiles/01ABC")).isTrue();
+        assertThat(AuthInterceptor.isPublicRoute("GET", "/api/profiles/01ABC/posts")).isTrue();
+        assertThat(AuthInterceptor.isPublicRoute("POST", "/api/profiles/01ABC")).isFalse();
         assertThat(AuthInterceptor.isPublicRoute("PUT", "/api/profile")).isFalse();
         assertThat(AuthInterceptor.isPublicRoute("GET", "/api/profile")).isFalse();
     }

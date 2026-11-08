@@ -22,6 +22,14 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
     List<Account> findByPublicIdInAndDeletedAtIsNull(Collection<String> publicIds);
 
     /**
+     * 按对外标识取「仍在」的单个账户。
+     *
+     * 与批量名片同口径：注销是软删除，行仍在但 {@code deleted_at} 非空，
+     * 公开用户页必须把它当不存在（spec「公开用户资料的未找到口径」）。
+     */
+    Optional<Account> findByPublicIdAndDeletedAtIsNull(String publicId);
+
+    /**
      * 按邮箱查「仍占用它的」账户。
      *
      * 判定条件用 deletedAt 而不是 status：唯一键 uk_accounts_active_email 的生成列正是

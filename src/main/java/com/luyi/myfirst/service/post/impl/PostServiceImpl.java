@@ -5,6 +5,7 @@ import com.luyi.myfirst.common.enums.PostStatus;
 import com.luyi.myfirst.common.exception.AuthErrorEnum;
 import com.luyi.myfirst.common.exception.BizException;
 import com.luyi.myfirst.common.exception.PostErrorEnum;
+import com.luyi.myfirst.common.exception.ProfileErrorEnum;
 import com.luyi.myfirst.common.id.Ulid;
 import com.luyi.myfirst.dao.auth.entity.Account;
 import com.luyi.myfirst.dao.auth.repository.AccountRepository;
@@ -149,6 +150,40 @@ public class PostServiceImpl implements PostService {
                     last.publishedAt(),
                     scoreOf(last, resolvedSort),
                     last.id()).encode();
+        }
+        return new PostPage(items, nextCursor);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PostPage feedByAuthor(String authorPublicId, String cursor, Integer limit) {
+        // 先解析作者：未知与已注销都按 404，走与公开资料同一个错误码（design D4）。
+        Account author = accounts.findByPublicIdAndDeletedAtIsNull(authorPublicId)
+                .orElseThrow(() -> new BizException(ProfileErrorEnum.PROFILE_NOT_FOUND));
+        int size = normalizeLimit(limit);
+        FeedCursor after = FeedCursor.decode(cursor);
+        if (after != null && after.sortBy() != PostSortBy.PUBLISHED_AT) {
+            throw new BizException(AuthErrorEnum.VALIDATION_FAILED);
+        }
+
+        Pageable pageable = PageRequest.of(0, size + 1);
+        List<Post> rows = after == null
+                ? posts.findPublishedByAuthor(author.id(), PostStatus.PUBLISHED, pageable)
+                : posts.findPublishedByAuthorAfter(
+                        author.id(), PostStatus.PUBLISHED, after.publishedAt(), after.id(), pageable);
+
+        boolean hasMore = rows.size() > size;
+        List<Post> page = hasMore ? rows.subList(0, size) : rows;
+        // 作者已经解析过一次，不必再走 authorPublicIdsOf 批量查：一页只有一个作者。
+        List<PostSummary> items = page.stream()
+                .map(post -> toSummary(post, author.publicId()))
+                .toList();
+
+        String nextCursor = null;
+        if (hasMore) {
+            Post last = page.get(page.size() - 1);
+            nextCursor = new FeedCursor(
+                    PostSortBy.PUBLISHED_AT, last.publishedAt(), null, last.id()).encode();
         }
         return new PostPage(items, nextCursor);
     }

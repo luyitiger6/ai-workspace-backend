@@ -58,6 +58,35 @@ public interface PostRepository extends JpaRepository<Post, Long> {
                              @Param("id") Long id,
                              Pageable pageable);
 
+    /**
+     * 用户页列表首页：某个作者的已发布、未删除帖子，按发布时刻倒序。
+     *
+     * 条件里没有「作者本人能看到自己草稿」的放宽：用户页是公开读，作者与游客拿到
+     * 同一份列表（design D8）。否则同一 URL 对不同身份返回不同内容，截图与缓存都无法复现。
+     */
+    @Query("""
+            select p from Post p
+            where p.authorId = :authorId and p.status = :status and p.deletedAt is null
+            order by p.publishedAt desc, p.id desc
+            """)
+    List<Post> findPublishedByAuthor(@Param("authorId") Long authorId,
+                                     @Param("status") PostStatus status,
+                                     Pageable pageable);
+
+    /** 用户页列表的游标之后一页：条件与 {@link #findFeedAfter} 同构，只多一个作者维度。 */
+    @Query("""
+            select p from Post p
+            where p.authorId = :authorId and p.status = :status and p.deletedAt is null
+              and (p.publishedAt < :publishedAt
+                   or (p.publishedAt = :publishedAt and p.id < :id))
+            order by p.publishedAt desc, p.id desc
+            """)
+    List<Post> findPublishedByAuthorAfter(@Param("authorId") Long authorId,
+                                          @Param("status") PostStatus status,
+                                          @Param("publishedAt") Instant publishedAt,
+                                          @Param("id") Long id,
+                                          Pageable pageable);
+
     /** feed 首页：按 upVoteCount 倒序、publishedAt 倒序、id 倒序兜底。 */
     @Query("""
             select p from Post p
