@@ -55,6 +55,22 @@ public class Post extends BaseEntity {
     @Column(name = "published_at")
     private Instant publishedAt;
 
+    /**
+     * 互动计数：由评论 / 投票 / 收藏的写入路径以原子增量维护。
+     *
+     * 只读映射（{@code insertable = false, updatable = false}）是刻意的：
+     * Hibernate 默认把实体的全部可更新列写进 UPDATE 语句，若计数列可写，
+     * 编辑帖子就会拿加载时的旧计数覆盖并发写入的增量。
+     */
+    @Column(name = "up_vote_count", nullable = false, insertable = false, updatable = false)
+    private int upVoteCount;
+
+    @Column(name = "comment_count", nullable = false, insertable = false, updatable = false)
+    private int commentCount;
+
+    @Column(name = "bookmark_count", nullable = false, insertable = false, updatable = false)
+    private int bookmarkCount;
+
     protected Post() {
         // JPA 需要
     }
@@ -143,5 +159,17 @@ public class Post extends BaseEntity {
 
     public Instant publishedAt() {
         return publishedAt;
+    }
+
+    public int upVoteCount() {
+        return upVoteCount;
+    }
+
+    public int commentCount() {
+        return commentCount;
+    }
+
+    public int bookmarkCount() {
+        return bookmarkCount;
     }
 }

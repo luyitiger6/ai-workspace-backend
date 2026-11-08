@@ -2,8 +2,9 @@
 -- 规范来源：docs/db-design-spec.md §4（公共字段）、§5.3（软删除唯一）、§7（外键策略）
 -- 执行方式：spring.sql.init.mode=always，应用启动时幂等执行；本阶段不引入迁移框架。
 -- 幂等要求：每条建表都用 IF NOT EXISTS，重复启动不得报错、不得改变既有结构。
--- 注意：accounts 表后续追加了 avatar_url / bio / interests 三列。CREATE TABLE IF NOT EXISTS
--- 不会给已存在的表补列，已有本地库需 drop 重建（06 闸门即如此）或手工 ALTER TABLE accounts 追加这三列。
+-- 注意：accounts 表后续追加了 avatar_url / bio / interests 三列，posts 表追加了 up_vote_count /
+-- comment_count / bookmark_count 三列。CREATE TABLE IF NOT EXISTS 不会给已存在的表补列，已有本地库
+-- 需 drop 重建（06 闸门即如此）或手工 ALTER TABLE 追加这些列（posts 还需一并补两条计数排序索引）。
 -- 本文件同时承载景点种子数据（设计 D3）：06 闸门会 drop 重建本库，种子只有住在建表脚本里
 -- 才能随重建一起恢复；种子用固定 public_id + INSERT IGNORE 保证重复执行无副作用。
 
@@ -65,6 +66,10 @@ CREATE TABLE IF NOT EXISTS posts (
   status       VARCHAR(16)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'draft',
   -- 排序键独立成列：先存草稿后发布时，created_at 会把新发布的帖排到老帖前面。
   published_at DATETIME(3)  NULL,
+  -- 互动计数列：由点赞/评论/收藏的写入路径以原子增量维护，实体侧只读映射，禁止整行写回。
+  up_vote_count  INT        NOT NULL DEFAULT 0,
+  comment_count  INT        NOT NULL DEFAULT 0,
+  bookmark_count INT        NOT NULL DEFAULT 0,
   created_at   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at   DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   deleted_at   DATETIME(3)  NULL,
@@ -75,10 +80,16 @@ CREATE TABLE IF NOT EXISTS posts (
   UNIQUE KEY uk_posts_public_id (public_id),
   -- 首页 feed 的形态：(等值列…, deleted_at, 排序列 DESC, id DESC)
   KEY idx_posts_feed (status, deleted_at, published_at DESC, id DESC),
+  -- 计数排序与 idx_posts_feed 同构，只把排序列换成计数列。
+  KEY idx_posts_up_vote_count (status, deleted_at, up_vote_count DESC, id DESC),
+  KEY idx_posts_comment_count (status, deleted_at, comment_count DESC, id DESC),
   KEY idx_posts_author (author_id, deleted_at, created_at DESC),
   CONSTRAINT fk_posts_author FOREIGN KEY (author_id) REFERENCES accounts (id)
     ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT ck_posts_status CHECK (status IN ('draft', 'published')),
+  CONSTRAINT ck_posts_up_vote_count CHECK (up_vote_count >= 0),
+  CONSTRAINT ck_posts_comment_count CHECK (comment_count >= 0),
+  CONSTRAINT ck_posts_bookmark_count CHECK (bookmark_count >= 0),
   CONSTRAINT ck_posts_version CHECK (version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 

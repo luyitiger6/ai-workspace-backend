@@ -4,6 +4,7 @@ import com.luyi.myfirst.common.enums.PostStatus;
 import com.luyi.myfirst.dao.post.entity.Post;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -61,9 +62,7 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     @Query("""
             select p from Post p
             where p.status = :status and p.deletedAt is null
-            order by (select count(v) from Vote v
-                      where v.postId = p.id and v.direction = com.luyi.myfirst.common.enums.VoteDirection.UP and v.deletedAt is null) desc,
-                     p.publishedAt desc, p.id desc
+            order by p.upVoteCount desc, p.publishedAt desc, p.id desc
             """)
     List<Post> findFeedByUpVoteCount(@Param("status") PostStatus status, Pageable pageable);
 
@@ -75,15 +74,11 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     @Query("""
             select p from Post p
             where p.status = :status and p.deletedAt is null
-              and ((select count(v) from Vote v
-                    where v.postId = p.id and v.direction = com.luyi.myfirst.common.enums.VoteDirection.UP and v.deletedAt is null) < :upVoteCount
-                   or ((select count(v) from Vote v
-                        where v.postId = p.id and v.direction = com.luyi.myfirst.common.enums.VoteDirection.UP and v.deletedAt is null) = :upVoteCount
+              and (p.upVoteCount < :upVoteCount
+                   or (p.upVoteCount = :upVoteCount
                        and (p.publishedAt < :publishedAt
                             or (p.publishedAt = :publishedAt and p.id < :id))))
-            order by (select count(v) from Vote v
-                      where v.postId = p.id and v.direction = com.luyi.myfirst.common.enums.VoteDirection.UP and v.deletedAt is null) desc,
-                     p.publishedAt desc, p.id desc
+            order by p.upVoteCount desc, p.publishedAt desc, p.id desc
             """)
     List<Post> findFeedByUpVoteCountAfter(@Param("status") PostStatus status,
                                           @Param("upVoteCount") long upVoteCount,
@@ -95,9 +90,7 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     @Query("""
             select p from Post p
             where p.status = :status and p.deletedAt is null
-            order by (select count(c) from Comment c
-                      where c.postId = p.id and c.deletedAt is null) desc,
-                     p.publishedAt desc, p.id desc
+            order by p.commentCount desc, p.publishedAt desc, p.id desc
             """)
     List<Post> findFeedByCommentCount(@Param("status") PostStatus status, Pageable pageable);
 
@@ -109,19 +102,38 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     @Query("""
             select p from Post p
             where p.status = :status and p.deletedAt is null
-              and ((select count(c) from Comment c
-                    where c.postId = p.id and c.deletedAt is null) < :commentCount
-                   or ((select count(c) from Comment c
-                        where c.postId = p.id and c.deletedAt is null) = :commentCount
+              and (p.commentCount < :commentCount
+                   or (p.commentCount = :commentCount
                        and (p.publishedAt < :publishedAt
                             or (p.publishedAt = :publishedAt and p.id < :id))))
-            order by (select count(c) from Comment c
-                      where c.postId = p.id and c.deletedAt is null) desc,
-                     p.publishedAt desc, p.id desc
+            order by p.commentCount desc, p.publishedAt desc, p.id desc
             """)
     List<Post> findFeedByCommentCountAfter(@Param("status") PostStatus status,
                                            @Param("commentCount") long commentCount,
                                            @Param("publishedAt") Instant publishedAt,
                                            @Param("id") Long id,
                                            Pageable pageable);
+
+    /**
+     * 三个计数列的原子增量。
+     *
+     * 写成 {@code 列 = 列 + :delta} 而不是「读出来加一再写回」：后者在并发下会丢更新。
+     * {@code updated_at = updated_at} 是必要的：列定义带 ON UPDATE CURRENT_TIMESTAMP(3)，
+     * 不显式保持，一次点赞就会把帖子的更新时间改成现在。
+     * 原生 SQL 是刻意的：JPQL bulk update 无法可靠地表达「列引用自身列」。
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = "update posts set up_vote_count = up_vote_count + :delta, updated_at = updated_at "
+            + "where id = :id and deleted_at is null", nativeQuery = true)
+    int incrementUpVoteCount(@Param("id") Long id, @Param("delta") int delta);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = "update posts set comment_count = comment_count + :delta, updated_at = updated_at "
+            + "where id = :id and deleted_at is null", nativeQuery = true)
+    int incrementCommentCount(@Param("id") Long id, @Param("delta") int delta);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = "update posts set bookmark_count = bookmark_count + :delta, updated_at = updated_at "
+            + "where id = :id and deleted_at is null", nativeQuery = true)
+    int incrementBookmarkCount(@Param("id") Long id, @Param("delta") int delta);
 }

@@ -1,6 +1,5 @@
 package com.luyi.myfirst.dao.post.repository;
 
-import com.luyi.myfirst.common.enums.VoteDirection;
 import com.luyi.myfirst.dao.post.entity.Vote;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -16,6 +15,4 @@ public interface VoteRepository extends JpaRepository<Vote, Long> {
     Optional<Vote> findByPostIdAndAuthorIdAndDeletedAtIsNull(Long postId, Long authorId);
 
     boolean existsByPostIdAndDeletedAtIsNull(Long postId);
-
-    long countByPostIdAndDirectionAndDeletedAtIsNull(Long postId, VoteDirection direction);
 }

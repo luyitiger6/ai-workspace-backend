@@ -109,6 +109,8 @@ class PostInteractionServiceTest {
                 .isEqualTo(AuthErrorEnum.VALIDATION_FAILED.getErrorCode());
 
         assertThat(interactions.listComments(post.publicId(), null, null, 10).items()).isEmpty();
+        // 被拒的写请求不能留下计数增量。
+        assertThat(feedOne(post.publicId()).commentCount()).isZero();
     }
 
     @Test
@@ -233,6 +235,79 @@ class PostInteractionServiceTest {
         interactions.cancelVote(author, post.publicId());
 
         assertThat(feedOne(post.publicId()).upVoteCount()).isEqualTo(0L);
+    }
+
+    @Test
+    @DisplayName("两个账户先后投赞成：upVoteCount 累计为 2，不出现只记 1 次")
+    void twoAccountsAccumulateUpVotes() {
+        VerifiedToken author = newToken("作者甲");
+        VerifiedToken first = newToken("读者甲");
+        VerifiedToken second = newToken("读者乙");
+        PostView post = posts.publish(author, published("成都三日"));
+
+        interactions.vote(first, post.publicId(), new VoteCreateCommand(VoteDirection.UP));
+        interactions.vote(second, post.publicId(), new VoteCreateCommand(VoteDirection.UP));
+
+        assertThat(feedOne(post.publicId()).upVoteCount()).isEqualTo(2L);
+    }
+
+    @Test
+    @DisplayName("反对票不计数：新建、同向重复、取消都保持 0；down→up 才净增 1，up→up 不重复加")
+    void downVoteNeverMovesUpVoteCount() {
+        VerifiedToken author = newToken("作者甲");
+        PostView post = posts.publish(author, published("成都三日"));
+
+        interactions.vote(author, post.publicId(), new VoteCreateCommand(VoteDirection.DOWN));
+        assertThat(feedOne(post.publicId()).upVoteCount()).isZero();
+
+        VoteResult again = interactions.vote(author, post.publicId(), new VoteCreateCommand(VoteDirection.DOWN));
+        assertThat(again.created()).isFalse();
+        assertThat(feedOne(post.publicId()).upVoteCount()).isZero();
+
+        interactions.cancelVote(author, post.publicId());
+        assertThat(feedOne(post.publicId()).upVoteCount()).isZero();
+
+        // down→up：方向换向净增 1，不是「先减一再加一」的两条增量。
+        interactions.vote(author, post.publicId(), new VoteCreateCommand(VoteDirection.DOWN));
+        interactions.vote(author, post.publicId(), new VoteCreateCommand(VoteDirection.UP));
+        assertThat(feedOne(post.publicId()).upVoteCount()).isEqualTo(1L);
+
+        // up→up 同向重复：差额为 0，不发增量。
+        interactions.vote(author, post.publicId(), new VoteCreateCommand(VoteDirection.UP));
+        assertThat(feedOne(post.publicId()).upVoteCount()).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("403/404 失败路径不写计数：评论、投票、收藏三个计数均与操作前一致")
+    void rejectedInteractionsLeaveAllCountersUntouched() {
+        VerifiedToken author = newToken("作者甲");
+        VerifiedToken other = newToken("路人乙");
+        PostView post = posts.publish(author, published("失败路径"));
+        CommentView comment = interactions.createComment(author, post.publicId(),
+                new CommentCreateCommand("既有评论", null));
+        interactions.vote(author, post.publicId(), new VoteCreateCommand(VoteDirection.UP));
+        interactions.bookmark(author, post.publicId());
+        String missing = Ulid.generate();
+
+        assertThat(rejectionOf(() -> interactions.deleteComment(other, post.publicId(), comment.publicId()))
+                .getErrorCode()).isEqualTo(PostErrorEnum.POST_FORBIDDEN.getErrorCode());
+        assertThat(rejectionOf(() -> interactions.cancelVote(other, post.publicId()))
+                .getErrorCode()).isEqualTo(PostErrorEnum.POST_FORBIDDEN.getErrorCode());
+        assertThat(rejectionOf(() -> interactions.cancelBookmark(other, post.publicId()))
+                .getErrorCode()).isEqualTo(PostErrorEnum.POST_FORBIDDEN.getErrorCode());
+        assertThat(rejectionOf(() -> interactions.createComment(author, missing,
+                new CommentCreateCommand("无主", null))).getErrorCode())
+                .isEqualTo(PostErrorEnum.POST_NOT_FOUND.getErrorCode());
+        assertThat(rejectionOf(() -> interactions.vote(author, missing,
+                new VoteCreateCommand(VoteDirection.UP))).getErrorCode())
+                .isEqualTo(PostErrorEnum.POST_NOT_FOUND.getErrorCode());
+        assertThat(rejectionOf(() -> interactions.bookmark(author, missing)).getErrorCode())
+                .isEqualTo(PostErrorEnum.POST_NOT_FOUND.getErrorCode());
+
+        PostSummary summary = feedOne(post.publicId());
+        assertThat(summary.commentCount()).isEqualTo(1L);
+        assertThat(summary.upVoteCount()).isEqualTo(1L);
+        assertThat(summary.bookmarkCount()).isEqualTo(1L);
     }
 
     @Test

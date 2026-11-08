@@ -408,7 +408,12 @@ class PasswordResetTest {
         assertThat(registerRetryAfter).isNotNull();
         // 两个端点算的是同一个「次日零点」，不是各自从此刻起数一个窗口：
         // 一份自然日额度只能有一个恢复时刻。
-        assertThat(resetRetryAfter).isEqualTo(registerRetryAfter);
+        //
+        // 差值只能放宽到 1 秒：retryAfterSeconds() 把「距次日零点的毫秒数」向上取整到秒，
+        // 两次请求相隔毫秒级，一旦跨过秒边界就必然差 1。若两者真的各数各的窗口，
+        // 差值会是整个窗口长度，仍然被这条断言挡住。
+        assertThat(Math.abs(Long.parseLong(resetRetryAfter) - Long.parseLong(registerRetryAfter)))
+                .isLessThanOrEqualTo(1L);
         assertThat(Long.parseLong(registerRetryAfter)).isBetween(1L, 86_400L);
 
         // 配额挡的是发码，不是账户：旧密码照样能登录。

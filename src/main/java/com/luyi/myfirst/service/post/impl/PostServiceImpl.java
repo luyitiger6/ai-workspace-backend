@@ -2,7 +2,6 @@ package com.luyi.myfirst.service.post.impl;
 
 import com.luyi.myfirst.common.enums.PostSortBy;
 import com.luyi.myfirst.common.enums.PostStatus;
-import com.luyi.myfirst.common.enums.VoteDirection;
 import com.luyi.myfirst.common.exception.AuthErrorEnum;
 import com.luyi.myfirst.common.exception.BizException;
 import com.luyi.myfirst.common.exception.PostErrorEnum;
@@ -10,10 +9,7 @@ import com.luyi.myfirst.common.id.Ulid;
 import com.luyi.myfirst.dao.auth.entity.Account;
 import com.luyi.myfirst.dao.auth.repository.AccountRepository;
 import com.luyi.myfirst.dao.post.entity.Post;
-import com.luyi.myfirst.dao.post.repository.BookmarkRepository;
-import com.luyi.myfirst.dao.post.repository.CommentRepository;
 import com.luyi.myfirst.dao.post.repository.PostRepository;
-import com.luyi.myfirst.dao.post.repository.VoteRepository;
 import com.luyi.myfirst.service.auth.model.VerifiedToken;
 import com.luyi.myfirst.service.media.MediaStorage;
 import com.luyi.myfirst.service.post.PostService;
@@ -58,24 +54,15 @@ public class PostServiceImpl implements PostService {
 
     private final PostRepository posts;
     private final AccountRepository accounts;
-    private final CommentRepository comments;
-    private final VoteRepository votes;
-    private final BookmarkRepository bookmarks;
     private final PostReadAccess readAccess;
     private final MediaStorage media;
 
     public PostServiceImpl(PostRepository posts,
                            AccountRepository accounts,
-                           CommentRepository comments,
-                           VoteRepository votes,
-                           BookmarkRepository bookmarks,
                            PostReadAccess readAccess,
                            MediaStorage media) {
         this.posts = posts;
         this.accounts = accounts;
-        this.comments = comments;
-        this.votes = votes;
-        this.bookmarks = bookmarks;
         this.readAccess = readAccess;
         this.media = media;
     }
@@ -150,9 +137,8 @@ public class PostServiceImpl implements PostService {
         boolean hasMore = rows.size() > size;
         List<Post> page = hasMore ? rows.subList(0, size) : rows;
         Map<Long, String> authorPublicIds = authorPublicIdsOf(page);
-        Map<Long, InteractionCounts> counts = countsOf(page);
         List<PostSummary> items = page.stream()
-                .map(post -> toSummary(post, authorPublicIds.get(post.authorId()), counts.get(post.id())))
+                .map(post -> toSummary(post, authorPublicIds.get(post.authorId())))
                 .toList();
 
         String nextCursor = null;
@@ -161,7 +147,7 @@ public class PostServiceImpl implements PostService {
             nextCursor = new FeedCursor(
                     resolvedSort,
                     last.publishedAt(),
-                    scoreOf(last, resolvedSort, counts.get(last.id())),
+                    scoreOf(last, resolvedSort),
                     last.id()).encode();
         }
         return new PostPage(items, nextCursor);
@@ -185,14 +171,11 @@ public class PostServiceImpl implements PostService {
         };
     }
 
-    private static Long scoreOf(Post post, PostSortBy sortBy, InteractionCounts counts) {
-        if (counts == null) {
-            return null;
-        }
+    private static Long scoreOf(Post post, PostSortBy sortBy) {
         return switch (sortBy) {
             case PUBLISHED_AT -> null;
-            case UP_VOTE_COUNT -> counts.upVoteCount();
-            case COMMENT_COUNT -> counts.commentCount();
+            case UP_VOTE_COUNT -> (long) post.upVoteCount();
+            case COMMENT_COUNT -> (long) post.commentCount();
         };
     }
 
@@ -201,21 +184,6 @@ public class PostServiceImpl implements PostService {
             return PostSortBy.PUBLISHED_AT;
         }
         return PostSortBy.fromDbValue(raw).orElseThrow(() -> new BizException(AuthErrorEnum.VALIDATION_FAILED));
-    }
-
-    private Map<Long, InteractionCounts> countsOf(List<Post> page) {
-        Map<Long, InteractionCounts> result = new HashMap<>();
-        for (Post post : page) {
-            result.put(post.id(), countsOf(post));
-        }
-        return result;
-    }
-
-    private InteractionCounts countsOf(Post post) {
-        return new InteractionCounts(
-                comments.countByPostIdAndDeletedAtIsNull(post.id()),
-                votes.countByPostIdAndDirectionAndDeletedAtIsNull(post.id(), VoteDirection.UP),
-                bookmarks.countByPostIdAndDeletedAtIsNull(post.id()));
     }
 
     private Post requireExisting(String postPublicId) {
@@ -259,7 +227,6 @@ public class PostServiceImpl implements PostService {
     }
 
     private PostView toView(Post post, String authorPublicId) {
-        InteractionCounts counts = countsOf(post);
         return new PostView(
                 post.publicId(),
                 post.title(),
@@ -270,12 +237,12 @@ public class PostServiceImpl implements PostService {
                 authorPublicId,
                 post.createdAt(),
                 post.updatedAt(),
-                counts.commentCount(),
-                counts.upVoteCount(),
-                counts.bookmarkCount());
+                post.commentCount(),
+                post.upVoteCount(),
+                post.bookmarkCount());
     }
 
-    private static PostSummary toSummary(Post post, String authorPublicId, InteractionCounts counts) {
+    private static PostSummary toSummary(Post post, String authorPublicId) {
         return new PostSummary(
                 post.publicId(),
                 post.title(),
@@ -285,15 +252,12 @@ public class PostServiceImpl implements PostService {
                 authorPublicId,
                 post.createdAt(),
                 post.updatedAt(),
-                counts == null ? 0L : counts.commentCount(),
-                counts == null ? 0L : counts.upVoteCount(),
-                counts == null ? 0L : counts.bookmarkCount());
+                post.commentCount(),
+                post.upVoteCount(),
+                post.bookmarkCount());
     }
 
     private static BizException notFound() {
         return new BizException(PostErrorEnum.POST_NOT_FOUND);
-    }
-
-    private record InteractionCounts(long commentCount, long upVoteCount, long bookmarkCount) {
     }
 }
