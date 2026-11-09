@@ -25,9 +25,10 @@ import java.util.List;
  * 空列表同样让启动失败——空清单会把每个写请求都拒掉，那种故障现场比启动失败难查得多。
  *
  * trustedProxies 是来源限流的信任边界（spec「登录失败以来源限流代替账户锁定」）：
- * 只有来自这些地址或网段的请求，其转发头才被采信。空列表是合法取值且含义明确——
- * 当前没有任何已登记代理，因此每个请求都归入「未知来源」单桶（宁可误伤，不可放过）；
- * 缺这一项则启动失败。
+ * 只有来自这些地址或网段的请求，其转发头才被采信。空列表不是「没有代理」的表达，
+ * 而是「所有请求共用一个未知来源桶」——它让来源限流退化为全站共享一份额度，
+ * 单个攻击者打满即可锁死全站，因此空列表 MUST 让启动失败。
+ * 本地开发填回环（127.0.0.1/32、::1/128），生产填前端代理所在网段。
  */
 @Validated
 @ConfigurationProperties(prefix = "wanderchain.auth")
@@ -44,6 +45,24 @@ public record AuthProperties(
 
     public AuthProperties {
         requireResolved("wanderchain.auth.jwt-secret", jwtSecret, "WANDERCHAIN_JWT_SECRET");
+        requireTrustedProxies(trustedProxies);
+    }
+
+    /**
+     * 拒绝空的信任边界。
+     *
+     * 空列表在运行期没有任何可观察的异常：所有请求一起落进「未知来源」桶，
+     * 现象是「全站被同一个人限流」，而配置看起来是「配了、也没报错」。
+     * 把它提前成启动失败，故障现场才会出现在部署阶段而不是攻击发生时。
+     * 这里同时拦 null：缺项时 @NotNull 也会报错，但那条消息不会说明为什么这一项不能空。
+     */
+    private static void requireTrustedProxies(List<String> trustedProxies) {
+        if (trustedProxies == null || trustedProxies.isEmpty()) {
+            throw new IllegalStateException(
+                    "wanderchain.auth.trusted-proxies 缺失或为空：空信任边界会让全部请求归入"
+                            + "「未知来源」单桶，来源限流退化为全站共享一份额度；"
+                            + "本地开发填 127.0.0.1/32、::1/128，生产填前端代理所在网段");
+        }
     }
 
     /**

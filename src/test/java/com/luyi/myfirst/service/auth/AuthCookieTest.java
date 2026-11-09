@@ -96,7 +96,7 @@ class AuthCookieTest {
                 "0123456789abcdef0123456789abcdef",
                 cookieSecure,
                 List.of("http://localhost:3000"),
-                List.of(),
+                List.of("127.0.0.1/32"),
                 new AuthProperties.Captcha(Duration.ofMinutes(2)),
                 new AuthProperties.EmailCode(Duration.ofMinutes(5), Duration.ofSeconds(60), 5, 5),
                 new AuthProperties.Login(5, Duration.ofMinutes(10), 20, Duration.ofSeconds(60)));

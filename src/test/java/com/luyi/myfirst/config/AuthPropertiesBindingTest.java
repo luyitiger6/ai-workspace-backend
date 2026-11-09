@@ -9,9 +9,12 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.Duration;
 import java.util.Arrays;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 配置绑定的边界：缺项、占位符没解析，都必须让容器起不来。
@@ -89,7 +92,24 @@ class AuthPropertiesBindingTest {
     }
 
     @Test
-    @DisplayName("缺 trusted-proxies：容器启动失败——空列表是明确取值，缺项不是")
+    @DisplayName("空 trusted-proxies：构造即失败，错误信息点名配置项")
+    void rejectsEmptyTrustedProxies() {
+        // 空信任边界不是「没有代理」的表达，而是「所有请求共用一个未知来源桶」：
+        // 来源限流会退化成全站一份额度，单个攻击者打满即可锁死全站。
+        assertThatThrownBy(() -> properties(List.of()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("trusted-proxies");
+    }
+
+    @Test
+    @DisplayName("回环信任边界：本地开发的取值可正常构造")
+    void acceptsLoopbackTrustedProxies() {
+        assertThat(properties(List.of("127.0.0.1/32", "::1/128")).trustedProxies())
+                .containsExactly("127.0.0.1/32", "::1/128");
+    }
+
+    @Test
+    @DisplayName("缺 trusted-proxies：容器启动失败——缺项与空列表都不是合法状态")
     void failsWhenTrustedProxiesMissing() {
         runner.withPropertyValues(without("wanderchain.auth.trusted-proxies[0]=10.0.0.0/8"))
                 .run(context -> assertThat(context).hasFailed());
@@ -111,6 +131,19 @@ class AuthPropertiesBindingTest {
 
     private static String[] without(String excluded) {
         return Arrays.stream(COMPLETE).filter(value -> !value.equals(excluded)).toArray(String[]::new);
+    }
+
+    /** 直接构造一条完整配置，只替换信任边界：用于绕过 Binder 单独验证构造期的自检。 */
+    private static AuthProperties properties(List<String> trustedProxies) {
+        return new AuthProperties(
+                Duration.ofDays(7),
+                "0123456789abcdef0123456789abcdef",
+                false,
+                List.of("http://localhost:3000"),
+                trustedProxies,
+                new AuthProperties.Captcha(Duration.ofMinutes(2)),
+                new AuthProperties.EmailCode(Duration.ofMinutes(5), Duration.ofSeconds(60), 5, 5),
+                new AuthProperties.Login(5, Duration.ofMinutes(10), 20, Duration.ofSeconds(60)));
     }
 
     @Configuration(proxyBeanMethods = false)
