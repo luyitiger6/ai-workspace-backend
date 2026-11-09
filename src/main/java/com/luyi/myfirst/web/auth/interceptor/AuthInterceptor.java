@@ -94,6 +94,8 @@ public class AuthInterceptor implements HandlerInterceptor {
         routes.put("/api/profiles/*", Set.of("GET"));
         routes.put("/api/profiles/*/posts", Set.of("GET"));
         routes.put("/api/profile/interests", Set.of("GET"));
+        // 私信域没有任何公开端点：会话列表与发起、消息分页与发送、标记已读、总未读
+        // 与会话推送全部要求登录，一个都不登记，默认即受保护（spec「未登录被拒绝」）。
         return Map.copyOf(routes);
     }
 
