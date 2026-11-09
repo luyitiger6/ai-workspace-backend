@@ -206,15 +206,28 @@ class PostServiceTest {
         assertThat(first.nextCursor()).isNotNull();
 
         // 翻页途中新增一条：keyset 只认 (published_at, id)，新帖排在前面，不会挤进第二页。
-        service.publish(author, published("插队的新帖"));
+        String interleaved = service.publish(author, published("插队的新帖")).publicId();
 
         PostPage second = service.feed(null, first.nextCursor(), 2);
         List<String> firstIds = first.items().stream().map(PostSummary::publicId).toList();
         List<String> secondIds = second.items().stream().map(PostSummary::publicId).toList();
 
         assertThat(secondIds).doesNotContainAnyElementsOf(firstIds);
-        assertThat(second.nextCursor()).isNull();
-        assertThat(firstIds.size() + secondIds.size()).isEqualTo(3);
+        assertThat(secondIds).doesNotContain(interleaved);
+
+        // 开发库不是空库：种子与人工冒烟都会留下已发布帖，所以「不遗漏」只能断言
+        // 本用例的三篇都能沿游标读到，而不能断言「整库恰好只有这三篇」。
+        List<String> collected = new ArrayList<>(firstIds);
+        String cursor = first.nextCursor();
+        for (int pages = 1; cursor != null && !collected.containsAll(publishedIds); pages++) {
+            assertThat(pages).as("三篇新帖应在库的头部附近，翻 50 页还找不到说明排序异常").isLessThan(50);
+            PostPage page = service.feed(null, cursor, 2);
+            page.items().forEach(item -> collected.add(item.publicId()));
+            cursor = page.nextCursor();
+        }
+
+        assertThat(collected).doesNotHaveDuplicates();
+        assertThat(collected).containsAll(publishedIds);
     }
 
     @Test

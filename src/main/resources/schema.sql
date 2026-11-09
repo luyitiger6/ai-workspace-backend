@@ -398,3 +398,61 @@ CREATE TABLE IF NOT EXISTS attraction_comments (
     ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT ck_attraction_comments_version CHECK (version >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- 私信会话。一对参与者只允许一条会话：两侧 id 按 accounts.id 升序归一化，
+-- low < high 由 CHECK 兜底，重复发起靠 uk_dm_conversations_pair 拦在库层而不是应用层约定。
+-- 两侧各存一份未读计数与已读位置：计数让会话列表读取零聚合，
+-- 已读位置让「标记已读」按位置重算而不是盲清零——盲清零会抹掉并发到达的新消息。
+-- last_read_message_id 是逻辑引用，不建外键：dm_messages 已引用本表，反向再加会形成循环依赖。
+CREATE TABLE IF NOT EXISTS dm_conversations (
+  id                        BIGINT      NOT NULL AUTO_INCREMENT,
+  public_id                 CHAR(26)    CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  participant_low_id        BIGINT      NOT NULL,
+  participant_high_id       BIGINT      NOT NULL,
+  last_message_at           DATETIME(3) NULL,
+  message_count             INT         NOT NULL DEFAULT 0,
+  low_unread_count          INT         NOT NULL DEFAULT 0,
+  high_unread_count         INT         NOT NULL DEFAULT 0,
+  low_last_read_message_id  BIGINT      NULL,
+  high_last_read_message_id BIGINT      NULL,
+  created_at                DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at                DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  deleted_at                DATETIME(3) NULL,
+  version                   INT         NOT NULL DEFAULT 0,
+  created_by                BIGINT      NULL,
+  updated_by                BIGINT      NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_dm_conversations_public_id (public_id),
+  UNIQUE KEY uk_dm_conversations_pair (participant_low_id, participant_high_id),
+  KEY idx_dm_conversations_low (participant_low_id, deleted_at, last_message_at DESC, id DESC),
+  KEY idx_dm_conversations_high (participant_high_id, deleted_at, last_message_at DESC, id DESC),
+  CONSTRAINT fk_dm_conversations_low FOREIGN KEY (participant_low_id) REFERENCES accounts (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_dm_conversations_high FOREIGN KEY (participant_high_id) REFERENCES accounts (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_dm_conversations_pair CHECK (participant_low_id < participant_high_id),
+  CONSTRAINT ck_dm_conversations_message_count CHECK (message_count >= 0),
+  CONSTRAINT ck_dm_conversations_low_unread CHECK (low_unread_count >= 0),
+  CONSTRAINT ck_dm_conversations_high_unread CHECK (high_unread_count >= 0),
+  CONSTRAINT ck_dm_conversations_version CHECK (version >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- 私信消息。按追加型模板只有 id / public_id / created_at：消息不可编辑、不可删除，
+-- 也没有软删与乐观锁的写入方，多出的列只会成为没人维护的装饰。
+-- idx_dm_messages_conv 以 (conversation_id, id) 而不是 created_at 排序：
+-- 会话内消息按自增 id 单调递增，比 DATETIME(3) 少了同毫秒歧义。
+CREATE TABLE IF NOT EXISTS dm_messages (
+  id              BIGINT        NOT NULL AUTO_INCREMENT,
+  public_id       CHAR(26)      CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  conversation_id BIGINT        NOT NULL,
+  sender_id       BIGINT        NOT NULL,
+  content         VARCHAR(2000) NOT NULL,
+  created_at      DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_dm_messages_public_id (public_id),
+  KEY idx_dm_messages_conv (conversation_id, id),
+  CONSTRAINT fk_dm_messages_conversation FOREIGN KEY (conversation_id) REFERENCES dm_conversations (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_dm_messages_sender FOREIGN KEY (sender_id) REFERENCES accounts (id)
+    ON DELETE RESTRICT ON UPDATE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

@@ -236,6 +236,11 @@ class CredentialsNormalizationTest {
         Account saved = accounts.saveAndFlush(
                 Account.createActive(Ulid.generate(), EMAIL, hasher.hash(rawPassword), "Gina"));
         accountIdToClean = saved.id();
+        // 账户失败计数活在共享缓存里、TTL 长达 30 天，键取自 accounts 的自增 id。
+        // 06 建表闸门每轮 DROP 重建 wanderchain，自增 id 回到低位后被下一轮复用，
+        // 于是新种的账户会继承「同一个 id 上一轮留下的失败计数」——本类第一条用例
+        // 只需要 4 次失败就会越线。新账户本就没有连续失败史，这里清的是陈旧残留。
+        throttle.clearAccountFailures(saved.id());
         return saved;
     }
 
