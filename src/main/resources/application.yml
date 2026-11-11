@@ -107,6 +107,29 @@ wanderchain:
     # 未抢到锁的请求最多等这么久，必须小于 lock-ttl；耗尽后各自查库（不回写）
     wait-timeout: ${WANDERCHAIN_ATTRACTION_CACHE_WAIT_TIMEOUT:1s}
 
+  # 天气与汇率快速查询。两个数据源当前都不需要凭据，因此本段没有任何 key。
+  travel:
+    # 天气数据源根地址（Open-Meteo，无需注册）。换源时只改这一项。
+    weather-base-url: https://api.open-meteo.com
+    # 汇率数据源根地址（ExchangeRate-API 开放端点，无 key，每天更新一次）
+    currency-base-url: https://open.er-api.com
+    # 出站建连与读取超时：外部服务慢的时候要显性失败，不能挂住请求
+    connect-timeout: 2s
+    read-timeout: 4s
+    # 天气缓存有效期：结果的最大陈旧窗口，也是外部额度的护栏
+    weather-cache-ttl: 30m
+    # 汇率缓存有效期：数据源每天只更新一次，缓存一天即与之对齐
+    currency-cache-ttl: 24h
+    # 城市 slug 到坐标的映射。天气按经纬度查询，避开城市名歧义与撞号编码
+    cities:
+      beijing:   { name-en: Beijing,   latitude: 39.9042, longitude: 116.4074 }
+      shanghai:  { name-en: Shanghai,  latitude: 31.2304, longitude: 121.4737 }
+      guangzhou: { name-en: Guangzhou, latitude: 23.1291, longitude: 113.2644 }
+      chengdu:   { name-en: Chengdu,   latitude: 30.5728, longitude: 104.0668 }
+      xian:      { name-en: "Xi'an",   latitude: 34.3416, longitude: 108.9398 }
+      hangzhou:  { name-en: Hangzhou,  latitude: 30.2741, longitude: 120.1551 }
+      sanya:     { name-en: Sanya,     latitude: 18.2528, longitude: 109.5119 }
+
 logging:
   level:
     root: INFO
