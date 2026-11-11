@@ -117,6 +117,23 @@ class WriteRateLimitInterceptorTest {
     }
 
     @Test
+    @DisplayName("多实例共用同一额度：一个实例耗尽后，另一个实例读到同一份额度桶")
+    void twoInterceptorsShareTheSameQuota() {
+        // 生产里多个副本各自持有拦截器实例、共用同一个 Redis；这里用两个实例复现同一拓扑。
+        WriteRateLimitInterceptor other = new WriteRateLimitInterceptor(redis, sourceKeys, limits);
+
+        for (int i = 0; i < limits.max(); i++) {
+            assertThat(other.preHandle(write(CLIENT), new MockHttpServletResponse(), new Object()))
+                    .as("另一个实例第 %d 次写请求应当放行", i + 1).isTrue();
+        }
+
+        assertThatThrownBy(() -> handle(write(CLIENT)))
+                .as("本实例一次未记数，仍应看到另一个实例写下的同一份额度")
+                .isInstanceOfSatisfying(BizException.class, e ->
+                        assertThat(e.getErrorCode()).isEqualTo("RATE_LIMITED"));
+    }
+
+    @Test
     @DisplayName("缓存不可用：按 fail-open 放行，而不是把一次 Redis 抖动放大成全站不可写")
     void failsOpenWhenCacheUnavailable() {
         StringRedisTemplate broken = new StringRedisTemplate() {
