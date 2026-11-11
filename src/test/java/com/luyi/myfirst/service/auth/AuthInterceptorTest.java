@@ -129,6 +129,15 @@ class AuthInterceptorTest {
         assertThat(AuthInterceptor.isPublicRoute("GET", "/api/profile")).isFalse();
     }
 
+    @Test
+    @DisplayName("旅行工具域两个 GET 公开，写方法一律不公开")
+    void travelRoutesOwnership() {
+        assertThat(AuthInterceptor.isPublicRoute("GET", "/api/travel/weather")).isTrue();
+        assertThat(AuthInterceptor.isPublicRoute("GET", "/api/travel/currency")).isTrue();
+        assertThat(AuthInterceptor.isPublicRoute("POST", "/api/travel/weather")).isFalse();
+        assertThat(AuthInterceptor.isPublicRoute("POST", "/api/travel/currency")).isFalse();
+    }
+
     private Account persistAccount() {
         Account account = Account.createActive(
                 UUID.randomUUID().toString().replace("-", "").substring(0, 26),
